@@ -163,3 +163,49 @@ def test_repr_shows_filepath(simple_model: nn.Module, tmp_path: Path) -> None:
     obs = NeuroInquisitor(simple_model, log_dir=tmp_path, filename="myweights.h5")
     assert "myweights.h5" in repr(obs)
     obs.close()
+
+
+def test_repr_shows_compress_flag(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, compress=True)
+    assert "compress=True" in repr(obs)
+    obs.close()
+
+
+def test_repr_shows_compress_false(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, compress=False)
+    assert "compress=False" in repr(obs)
+    obs.close()
+
+
+# ---------------------------------------------------------------------------
+# log_dir creation
+# ---------------------------------------------------------------------------
+
+
+def test_nested_log_dir_is_created(simple_model: nn.Module, tmp_path: Path) -> None:
+    nested = tmp_path / "a" / "b" / "c"
+    assert not nested.exists()
+    obs = NeuroInquisitor(simple_model, log_dir=nested)
+    assert nested.exists()
+    obs.close()
+
+
+def test_log_dir_as_string(simple_model: nn.Module, tmp_path: Path) -> None:
+    log_dir = str(tmp_path / "str_dir")
+    obs = NeuroInquisitor(simple_model, log_dir=log_dir)
+    assert (tmp_path / "str_dir").exists()
+    obs.close()
+
+
+# ---------------------------------------------------------------------------
+# close() guard when _file was never set
+# ---------------------------------------------------------------------------
+
+
+def test_close_safe_when_file_never_opened(simple_model: nn.Module) -> None:
+    # Construct a bare instance without going through __init__ so _file is absent,
+    # then verify close() does not raise.
+    obs = object.__new__(NeuroInquisitor)
+    obs._closed = False  # type: ignore[attr-defined]
+    obs._filepath = "<none>"  # type: ignore[attr-defined]
+    obs.close()  # must not raise even though _file was never set
