@@ -163,3 +163,22 @@ def test_repr_shows_filepath(simple_model: nn.Module, tmp_path: Path) -> None:
     obs = NeuroInquisitor(simple_model, log_dir=tmp_path, filename="myweights.h5")
     assert "myweights.h5" in repr(obs)
     obs.close()
+
+
+def test_repr_shows_compress_flag(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, compress=True)
+    assert "compress=True" in repr(obs)
+    obs.close()
+
+
+# ---------------------------------------------------------------------------
+# log_dir creation
+# ---------------------------------------------------------------------------
+
+
+def test_nested_log_dir_is_created(simple_model: nn.Module, tmp_path: Path) -> None:
+    nested = tmp_path / "a" / "b" / "c"
+    assert not nested.exists()
+    obs = NeuroInquisitor(simple_model, log_dir=nested)
+    assert nested.exists()
+    obs.close()
