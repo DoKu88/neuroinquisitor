@@ -228,6 +228,61 @@ def test_metadata_both_reserved_keys_raises(observer: NeuroInquisitor) -> None:
         observer.snapshot(epoch=0, metadata={"epoch": 0, "step": 0})
 
 
+def test_snapshot_still_usable_after_reserved_key_error(
+    observer: NeuroInquisitor,
+) -> None:
+    # Bug regression: reserved key error must not poison the epoch slot.
+    with pytest.raises(ValueError, match="reserved key"):
+        observer.snapshot(epoch=0, metadata={"epoch": 99})
+    # Same epoch must succeed now that validation fires before group creation.
+    observer.snapshot(epoch=0)
+
+
+def test_metadata_empty_dict_is_noop(observer: NeuroInquisitor, tmp_path: Path) -> None:
+    import h5py
+
+    observer.snapshot(epoch=0, metadata={})
+    observer.close()
+
+    with h5py.File(tmp_path / "weights.h5", "r") as f:
+        # Only the built-in "epoch" attr should be present; no extras.
+        assert set(f["epoch_0000"].attrs.keys()) == {"epoch"}
+
+
+# ---------------------------------------------------------------------------
+# Step attr stored for epoch+step snapshots
+# ---------------------------------------------------------------------------
+
+
+def test_epoch_and_step_both_stored_as_attrs(
+    observer: NeuroInquisitor, tmp_path: Path
+) -> None:
+    import h5py
+
+    observer.snapshot(epoch=3, step=50)
+    observer.close()
+
+    with h5py.File(tmp_path / "weights.h5", "r") as f:
+        grp = f["epoch_0003_step_000050"]
+        assert grp.attrs["epoch"] == 3
+        assert grp.attrs["step"] == 50
+
+
+# ---------------------------------------------------------------------------
+# load_snapshot for step-only snapshot (documents unsupported path)
+# ---------------------------------------------------------------------------
+
+
+def test_load_snapshot_raises_for_step_only_snapshot(
+    observer: NeuroInquisitor,
+) -> None:
+    # step-only snapshots are stored under "step_XXXXXX", not "epoch_XXXX",
+    # so load_snapshot(epoch=...) cannot retrieve them.
+    observer.snapshot(step=5)
+    with pytest.raises(KeyError):
+        observer.load_snapshot(epoch=5)
+
+
 # ---------------------------------------------------------------------------
 # Model with no parameters
 # ---------------------------------------------------------------------------

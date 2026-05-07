@@ -19,3 +19,11 @@ def test_neuroinquisitor_class_exported() -> None:
     assert NeuroInquisitor is not None
 
 
+def test_dunder_all_contains_expected_names() -> None:
+    import neuroinquisitor
+
+    assert hasattr(neuroinquisitor, "__all__")
+    assert "NeuroInquisitor" in neuroinquisitor.__all__
+    assert "__version__" in neuroinquisitor.__all__
+
+

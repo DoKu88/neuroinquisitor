@@ -251,3 +251,44 @@ def test_dotted_parameter_names_round_trip(tmp_path: Path) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Compression: chunks attribute
+# ---------------------------------------------------------------------------
+
+
+def test_chunks_not_none_when_compress_true(mlp: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=True)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    with h5py.File(tmp_path / "weights.h5", "r") as f:
+        grp = f["epoch_0000"]
+        for name in grp:
+            assert grp[name].chunks is not None, f"Expected chunks for {name}"
+
+
+def test_chunks_none_when_compress_false(mlp: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=False)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    with h5py.File(tmp_path / "weights.h5", "r") as f:
+        grp = f["epoch_0000"]
+        for name in grp:
+            assert grp[name].chunks is None, f"Expected no chunks for {name}"
+
+
+# ---------------------------------------------------------------------------
+# load_snapshot return type
+# ---------------------------------------------------------------------------
+
+
+def test_load_snapshot_returns_numpy_arrays(
+    mlp: nn.Module, obs: NeuroInquisitor
+) -> None:
+    obs.snapshot(epoch=0)
+    loaded = obs.load_snapshot(epoch=0)
+    for name, arr in loaded.items():
+        assert isinstance(arr, np.ndarray), f"{name} is {type(arr)}, expected ndarray"
+
+

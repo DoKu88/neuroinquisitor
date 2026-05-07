@@ -94,6 +94,16 @@ class NeuroInquisitor:
         if epoch is None and step is None:
             raise ValueError("At least one of epoch or step must be provided.")
 
+        # Validate everything before touching the file.
+        if metadata is not None:
+            reserved = frozenset({"epoch", "step"}) & metadata.keys()
+            if reserved:
+                raise ValueError(
+                    f"Metadata contains reserved key(s) {sorted(reserved)}. "
+                    "Choose different key names to avoid collision with "
+                    "built-in snapshot attributes."
+                )
+
         group_key = self._group_key(epoch, step)
         if group_key in self._file:
             raise ValueError(
@@ -108,13 +118,6 @@ class NeuroInquisitor:
         if step is not None:
             grp.attrs["step"] = step
         if metadata is not None:
-            reserved = frozenset({"epoch", "step"}) & metadata.keys()
-            if reserved:
-                raise ValueError(
-                    f"Metadata contains reserved key(s) {sorted(reserved)}. "
-                    "Choose different key names to avoid collision with "
-                    "built-in snapshot attributes."
-                )
             for key, value in metadata.items():
                 grp.attrs[key] = value
 
