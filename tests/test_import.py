@@ -1,7 +1,5 @@
 """Smoke tests: package imports and basic attributes are present."""
 
-import pytest
-
 import neuroinquisitor
 
 
@@ -21,8 +19,3 @@ def test_neuroinquisitor_class_exported() -> None:
     assert NeuroInquisitor is not None
 
 
-def test_neuroinquisitor_not_yet_implemented() -> None:
-    from neuroinquisitor import NeuroInquisitor
-
-    with pytest.raises(NotImplementedError):
-        NeuroInquisitor()
