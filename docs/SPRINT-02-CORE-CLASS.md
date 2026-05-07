@@ -6,7 +6,6 @@
 ## Tasks
 - Create `NeuroInquisitor` class in `neuroinquisitor/core.py`
 - Support these `__init__` parameters: `model`, `log_dir`, `filename`, `compress`, `create_new`
-  - Note: `freq` is deferred to a later phase; Phase 1 keeps snapshots fully explicit (user calls `snapshot()`)
 - Add explicit `close()` method that finalizes the HDF5 file
 - Add `__repr__` and basic logging
 - Handle HDF5 file opening modes safely (open in `__init__`)

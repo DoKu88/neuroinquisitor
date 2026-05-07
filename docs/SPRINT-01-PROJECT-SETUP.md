@@ -4,8 +4,6 @@
 **Goal**: Create a clean, modern, pip-installable Python package structure.
 
 ## Tasks
-- Create GitHub repository `neuroinquisitor`
-- Initialize the project with `pyproject.toml` (modern PEP 621 style)
 - Add proper package metadata (name, version, description, author, license, classifiers)
 - Define core dependencies (`torch`, `h5py`, `numpy`) and optional dependencies
 - Create package folder: `neuroinquisitor/` (under `src/` per setuptools layout)

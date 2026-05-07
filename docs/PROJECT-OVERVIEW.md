@@ -11,7 +11,7 @@
 - Follow modern Python packaging best practices so the library can be installed via `pip install neuroinquisitor`.
 
 ## Goals
-- Make weight saving automatic, safe, efficient, and production-ready.
+- Make weight saving explicit, safe, efficient, and production-ready.
 - Support multiple snapshots over training without data loss or corruption.
 - Provide easy read-back of saved weights for later analysis.
 - Ensure the package is fully tested and follows PyPI standards.
@@ -31,8 +31,6 @@ Create an observer with at least the **model** and where to write the database:
 | `filename` | HDF5 filename (for example `weights.h5`). |
 | `compress` | Whether weight datasets are stored with HDF5 compression (for example gzip). |
 | `create_new` | Controls whether to start a new file or continue an existing one (together with safe HDF5 open modes). |
-
-> **Note on `freq`:** the original sprint plan listed a `freq` parameter for periodic snapshots. Phase 1 keeps snapshots **fully explicit** — the user decides when by calling `snapshot()`. `freq` is therefore deferred to a later phase (auto-snapshot mode); it is not part of the Phase 1 constructor.
 
 ### Lifecycle (explicit)
 
@@ -87,7 +85,7 @@ observer.close()
 - Proper package structure (`pyproject.toml`)
 
 **Phase 1 Success Criteria**  
-You can run `pip install -e .`, train any PyTorch model, call `observer.snapshot()` periodically, call `observer.close()` at the end, and end up with a usable `weights.h5` file containing all weight tensors from multiple epochs. All tests pass.
+You can run `pip install -e .`, train any PyTorch model, call `observer.snapshot()` at chosen steps or epochs, call `observer.close()` at the end, and end up with a usable `weights.h5` file containing all weight tensors from multiple epochs. All tests pass.
 
 **Next Phase**  
 Gradients, activations, statistics, PCA/UMAP, Captum integration, and full PyPI release.
