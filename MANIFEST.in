@@ -1,0 +1,8 @@
+include pyproject.toml
+include README.md
+
+recursive-exclude tests *
+recursive-exclude * __pycache__
+recursive-exclude * *.py[cod]
+recursive-exclude docs *
+
