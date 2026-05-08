@@ -229,17 +229,27 @@ def _make_video(
 def _save_loss_curves(
     train_losses: list[float],
     test_losses: list[float],
+    accuracy_history: list[float],
     out_path: Path,
 ) -> None:
     epochs = range(1, len(train_losses) + 1)
-    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
-    ax.plot(epochs, train_losses, marker="o", label="Train loss")
-    ax.plot(epochs, test_losses,  marker="s", label="Test loss")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Cross-entropy loss")
-    ax.set_title("CIFAR-10 training curves")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    fig, (ax_loss, ax_acc) = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+
+    ax_loss.plot(epochs, train_losses, marker="o", label="Train loss")
+    ax_loss.plot(epochs, test_losses,  marker="s", label="Test loss")
+    ax_loss.set_xlabel("Epoch")
+    ax_loss.set_ylabel("Cross-entropy loss")
+    ax_loss.set_title("CIFAR-10 — loss")
+    ax_loss.legend()
+    ax_loss.grid(True, alpha=0.3)
+
+    ax_acc.plot(epochs, [a * 100 for a in accuracy_history], marker="o", color="tab:green")
+    ax_acc.set_xlabel("Epoch")
+    ax_acc.set_ylabel("Test accuracy (%)")
+    ax_acc.set_title("CIFAR-10 — test accuracy")
+    ax_acc.set_ylim(0, 100)
+    ax_acc.grid(True, alpha=0.3)
+
     fig.savefig(str(out_path), dpi=150)
     plt.close(fig)
 
@@ -250,7 +260,11 @@ def _save_loss_curves(
 
 def main() -> None:
     torch.manual_seed(42)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
     run_name = petname.generate(words=2, separator="-")
     run_dir = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / run_name
@@ -274,17 +288,18 @@ def main() -> None:
 
     train_ds = datasets.CIFAR10(data_dir, train=True,  download=True, transform=transform_train)
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=True)
+    pin = device.type == "cuda"
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin)
+    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin)
 
     model = CIFAR10Net().to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=30)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
     loss_fn = nn.CrossEntropyLoss()
 
     observer = NeuroInquisitor(model, log_dir=run_dir, compress=True, create_new=True)
 
-    num_epochs = 30
+    num_epochs = 60
     train_loss_history: list[float] = []
     test_loss_history: list[float] = []
     accuracy_history: list[float] = []
@@ -314,18 +329,19 @@ def main() -> None:
         train_loss_history.append(avg_train_loss)
 
         model.eval()
-        correct = total = 0
-        test_loss = 0.0
+        total = 0
+        test_loss_acc = torch.zeros(1, device=device)
+        correct_acc   = torch.zeros(1, device=device, dtype=torch.long)
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(device), labels.to(device)
                 out = model(images)
-                test_loss += loss_fn(out, labels).item()
-                correct += (out.argmax(1) == labels).sum().item()
+                test_loss_acc += loss_fn(out, labels)
+                correct_acc   += (out.argmax(1) == labels).sum()
                 total += labels.size(0)
 
-        avg_test_loss = test_loss / len(test_loader)
-        acc = correct / total
+        avg_test_loss = (test_loss_acc.item() / len(test_loader))
+        acc = correct_acc.item() / total
         test_loss_history.append(avg_test_loss)
         accuracy_history.append(acc)
 
@@ -347,7 +363,7 @@ def main() -> None:
     print(f"Video saved: {result}")
 
     curves_path = run_dir / "loss_curves.png"
-    _save_loss_curves(train_loss_history, test_loss_history, curves_path)
+    _save_loss_curves(train_loss_history, test_loss_history, accuracy_history, curves_path)
     print(f"Loss curves: {curves_path}")
     print(f"\nAll outputs in: {run_dir}/")
 

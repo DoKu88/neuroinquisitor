@@ -315,7 +315,11 @@ def _save_loss_curves(
 
 def main() -> None:
     torch.manual_seed(42)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
     run_name = petname.generate(words=2, separator="-")
     run_dir = Path(__file__).parent.parent / "outputs" / "grokking_example" / run_name
@@ -358,10 +362,14 @@ def main() -> None:
                 with torch.no_grad():
                     train_logits = model(train_x)
                     test_logits  = model(test_x)
-                    tr_loss = loss_fn(train_logits, train_y).item()
-                    te_loss = loss_fn(test_logits,  test_y).item()
-                    tr_acc = (train_logits.argmax(1) == train_y).float().mean().item()
-                    te_acc = (test_logits.argmax(1)  == test_y).float().mean().item()
+                    tr_loss_t = loss_fn(train_logits, train_y)
+                    te_loss_t = loss_fn(test_logits,  test_y)
+                    tr_acc_t  = (train_logits.argmax(1) == train_y).float().mean()
+                    te_acc_t  = (test_logits.argmax(1)  == test_y).float().mean()
+                    # single sync point: batch all .item() calls together
+                    tr_loss, te_loss, tr_acc, te_acc = (
+                        tr_loss_t.item(), te_loss_t.item(), tr_acc_t.item(), te_acc_t.item()
+                    )
 
                 train_loss_history.append(tr_loss)
                 test_loss_history.append(te_loss)
