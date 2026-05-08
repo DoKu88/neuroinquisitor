@@ -5,24 +5,70 @@ from __future__ import annotations
 import json
 
 from neuroinquisitor.backends.base import Backend
+from neuroinquisitor.schema import (
+    CapturePolicy,
+    RunManifest,
+    RunMetadata,
+    SnapshotRef,
+    load_manifest,
+)
 
 from .base import Index, IndexEntry
 
 _KEY = "index.json"
 
 
+def _entry_to_ref(entry: IndexEntry) -> SnapshotRef:
+    return SnapshotRef(
+        epoch=entry.epoch,
+        step=entry.step,
+        file_key=entry.file_key,
+        layers=entry.layers,
+        buffers=entry.buffers,
+        metadata=entry.metadata,
+        capture_policy=entry.capture_policy,
+    )
+
+
+def _ref_to_entry(ref: SnapshotRef) -> IndexEntry:
+    return IndexEntry(
+        epoch=ref.epoch,
+        step=ref.step,
+        file_key=ref.file_key,
+        layers=ref.layers,
+        buffers=ref.buffers,
+        metadata=ref.metadata,
+        capture_policy=ref.capture_policy,
+    )
+
+
 class JSONIndex(Index):
     """Stores the snapshot catalog as ``index.json`` via the backend.
 
     The file is rewritten on every :meth:`add` so the catalog is always
-    up to date on disk.  Future implementors may swap this for a
-    :class:`SQLiteIndex` or a remote SQL catalog without changing
-    anything above the :class:`~neuroinquisitor.index.base.Index` interface.
+    up to date on disk.  The on-disk format is a :class:`~neuroinquisitor.schema.RunManifest`
+    serialised as JSON, with a ``schema_version`` field for future migrations.
+    Future implementors may swap this for a :class:`SQLiteIndex` or a
+    remote SQL catalog without changing anything above the
+    :class:`~neuroinquisitor.index.base.Index` interface.
     """
 
     def __init__(self, backend: Backend) -> None:
         super().__init__(backend)
+        self._manifest: RunManifest = RunManifest()
         self._entries: list[IndexEntry] = []
+
+    # ------------------------------------------------------------------
+    # Manifest-level helpers
+    # ------------------------------------------------------------------
+
+    def set_run_metadata(self, metadata: RunMetadata) -> None:
+        """Attach run-level provenance metadata (call before first save)."""
+        self._manifest = self._manifest.model_copy(update={"run_metadata": metadata})
+
+    def set_capture_policy(self, policy: CapturePolicy) -> None:
+        """Attach the run-level capture policy (call before first save)."""
+        self._manifest = self._manifest.model_copy(update={"capture_policy": policy})
 
     # ------------------------------------------------------------------
     # Index interface
@@ -45,35 +91,18 @@ class JSONIndex(Index):
         return any(e.file_key == file_key for e in self._entries)
 
     def save(self) -> None:
-        payload = {
-            "snapshots": [
-                {
-                    "epoch": e.epoch,
-                    "step": e.step,
-                    "file_key": e.file_key,
-                    "layers": e.layers,
-                    "metadata": e.metadata,
-                }
-                for e in self._entries
-            ]
-        }
-        self._backend.write(_KEY, json.dumps(payload, indent=2).encode())
+        manifest = self._manifest.model_copy(
+            update={"snapshots": [_entry_to_ref(e) for e in self._entries]}
+        )
+        self._backend.write(_KEY, manifest.model_dump_json(indent=2).encode())
 
     @classmethod
     def load(cls, backend: Backend) -> JSONIndex:
         instance = cls(backend)
         if not backend.exists(_KEY):
             return instance
-        raw = backend.read_path(_KEY).read_bytes()
-        data = json.loads(raw)
-        instance._entries = [
-            IndexEntry(
-                epoch=s["epoch"],
-                step=s["step"],
-                file_key=s["file_key"],
-                layers=s.get("layers", []),
-                metadata=s.get("metadata", {}),
-            )
-            for s in data["snapshots"]
-        ]
+        raw = json.loads(backend.read_path(_KEY).read_bytes())
+        manifest = load_manifest(raw)
+        instance._manifest = manifest.model_copy(update={"snapshots": []})
+        instance._entries = [_ref_to_entry(ref) for ref in manifest.snapshots]
         return instance
