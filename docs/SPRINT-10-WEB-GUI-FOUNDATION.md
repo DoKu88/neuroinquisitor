@@ -1,6 +1,8 @@
-# Sprint 9: Web GUI Foundation
+# Sprint 10: Web GUI Foundation
 
 **Goal**: Release the first web GUI.
+
+**Prerequisite**: Sprint 9 must be complete. The frontend panels read from Parquet artifacts and call analyzers via the registry; both must exist before this sprint begins.
 
 ## Tasks
 - [ ] `NI-EPSILON-001` Build a FastAPI backend.
