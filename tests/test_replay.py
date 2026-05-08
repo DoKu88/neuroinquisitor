@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Callable
 
@@ -17,10 +19,6 @@ from neuroinquisitor.replay import (
     ReplayMetadata,
     ReplayResult,
     ReplaySession,
-    balanced_n,
-    explicit_indices,
-    first_n,
-    random_n,
 )
 
 
@@ -428,7 +426,7 @@ def test_first_n_slice_n_samples(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=first_n(4),
+        dataset_slice=lambda flat: flat[:4],
     )
     result = session.run()
     assert result.metadata is not None
@@ -442,6 +440,9 @@ def test_random_n_slice_deterministic(
 ) -> None:
     run_dir, factory = mlp_run
 
+    def seeded_sample(flat: list) -> list:
+        return random.Random(42).sample(flat, min(8, len(flat)))
+
     def make() -> ReplayResult:
         return ReplaySession(
             run=run_dir,
@@ -450,7 +451,7 @@ def test_random_n_slice_deterministic(
             dataloader=mlp_dataloader,
             modules=["fc1"],
             capture=["activations"],
-            dataset_slice=random_n(8, seed=42),
+            dataset_slice=seeded_sample,
         ).run()
 
     r1 = make()
@@ -472,7 +473,7 @@ def test_random_n_different_seeds_differ(
             dataloader=mlp_dataloader,
             modules=["fc1"],
             capture=["activations"],
-            dataset_slice=random_n(8, seed=seed),
+            dataset_slice=lambda flat, s=seed: random.Random(s).sample(flat, min(8, len(flat))),
         ).run()
 
     r1 = make(0)
@@ -480,11 +481,22 @@ def test_random_n_different_seeds_differ(
     assert not torch.allclose(r1.activations["fc1"], r2.activations["fc1"])
 
 
-def test_balanced_n_slice(
+def test_balanced_slice(
     mlp_run: tuple[Path, Callable[[], nn.Module]],
     mlp_dataloader: torch.utils.data.DataLoader[tuple[torch.Tensor, ...]],
 ) -> None:
     run_dir, factory = mlp_run
+
+    def balanced(flat: list) -> list:
+        groups: dict[int, list[int]] = defaultdict(list)
+        for idx, (_, label) in enumerate(flat):
+            groups[int(label.item())].append(idx)
+        rng = random.Random(0)
+        indices: list[int] = []
+        for class_indices in groups.values():
+            indices.extend(rng.sample(class_indices, min(4, len(class_indices))))
+        return [flat[i] for i in indices[:8]]
+
     session = ReplaySession(
         run=run_dir,
         checkpoint=0,
@@ -492,14 +504,14 @@ def test_balanced_n_slice(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=balanced_n(8, seed=0),
-        slice_metadata={"kind": "balanced_n", "n": 8, "seed": 0},
+        dataset_slice=balanced,
+        slice_metadata={"kind": "balanced", "n": 8, "seed": 0},
     )
     result = session.run()
     assert result.metadata is not None
     assert result.metadata.n_samples <= 8
     assert result.metadata.dataset_slice is not None
-    assert result.metadata.dataset_slice["kind"] == "balanced_n"
+    assert result.metadata.dataset_slice["kind"] == "balanced"
 
 
 def test_explicit_indices_slice(
@@ -514,30 +526,12 @@ def test_explicit_indices_slice(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=explicit_indices([0, 1, 2, 3]),
+        dataset_slice=lambda flat: [flat[i] for i in [0, 1, 2, 3]],
     )
     result = session.run()
     assert result.metadata is not None
     assert result.metadata.n_samples == 4
     assert result.activations["fc1"].shape == (4, 8)
-
-
-def test_explicit_indices_out_of_range_raises(
-    mlp_run: tuple[Path, Callable[[], nn.Module]],
-    mlp_dataloader: torch.utils.data.DataLoader[tuple[torch.Tensor, ...]],
-) -> None:
-    run_dir, factory = mlp_run
-    session = ReplaySession(
-        run=run_dir,
-        checkpoint=0,
-        model_factory=factory,
-        dataloader=mlp_dataloader,
-        modules=["fc1"],
-        capture=["activations"],
-        dataset_slice=explicit_indices([0, 999]),
-    )
-    with pytest.raises(ValueError, match="out of range"):
-        session.run()
 
 
 def test_slice_metadata_persisted_in_result(
@@ -552,7 +546,7 @@ def test_slice_metadata_persisted_in_result(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=random_n(6, seed=7),
+        dataset_slice=lambda flat: random.Random(7).sample(flat, min(6, len(flat))),
         slice_metadata={"kind": "random_n", "n": 6, "seed": 7},
     )
     result = session.run()
@@ -580,31 +574,6 @@ def test_no_slice_uses_all_samples(
     assert result.metadata is not None
     assert result.metadata.n_samples == 16
     assert result.metadata.dataset_slice is None
-
-
-# ---------------------------------------------------------------------------
-# NI-BETA-004: slice factory validation
-# ---------------------------------------------------------------------------
-
-
-def test_first_n_rejects_zero() -> None:
-    with pytest.raises(ValueError, match="n must be"):
-        first_n(0)
-
-
-def test_random_n_rejects_zero() -> None:
-    with pytest.raises(ValueError, match="n must be"):
-        random_n(0, seed=1)
-
-
-def test_balanced_n_rejects_zero() -> None:
-    with pytest.raises(ValueError, match="n must be"):
-        balanced_n(0, seed=1)
-
-
-def test_explicit_indices_rejects_empty() -> None:
-    with pytest.raises(ValueError, match="indices must not be empty"):
-        explicit_indices([])
 
 
 # ---------------------------------------------------------------------------

@@ -11,10 +11,6 @@ from neuroinquisitor.replay import (
     ReplayMetadata,
     ReplayResult,
     ReplaySession,
-    balanced_n,
-    explicit_indices,
-    first_n,
-    random_n,
 )
 from neuroinquisitor.schema import CapturePolicy, RunManifest, RunMetadata
 
@@ -37,9 +33,5 @@ __all__ = [
     "ReplayResult",
     "ReplayMetadata",
     "CheckpointSelector",
-    "first_n",
-    "random_n",
-    "balanced_n",
-    "explicit_indices",
     "__version__",
 ]

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import random
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
@@ -16,84 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from neuroinquisitor.backends.base import Backend
 from neuroinquisitor.formats.base import Format
 from neuroinquisitor.loader import load as _load_collection
-
-# ---------------------------------------------------------------------------
-# Dataset slice factory functions — NI-BETA-004
-# ---------------------------------------------------------------------------
-
-
-def _label_to_int(label: torch.Tensor) -> int:
-    if label.ndim == 0 or label.numel() == 1:
-        return int(label.item())
-    return int(label.argmax().item())
-
-
-def first_n(n: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
-    """Return the first N samples."""
-    if n <= 0:
-        raise ValueError(f"n must be > 0, got {n}")
-
-    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
-        return flat[:n]
-
-    return _slice
-
-
-def random_n(n: int, seed: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
-    """Return N samples chosen at random with a fixed seed."""
-    if n <= 0:
-        raise ValueError(f"n must be > 0, got {n}")
-
-    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
-        rng = random.Random(seed)
-        return rng.sample(flat, min(n, len(flat)))
-
-    return _slice
-
-
-def balanced_n(n: int, seed: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
-    """Return up to N samples with equal representation per class.
-
-    Requires batches of the form ``(inputs, labels)``.
-    """
-    if n <= 0:
-        raise ValueError(f"n must be > 0, got {n}")
-
-    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
-        if not flat or len(flat[0]) < 2:
-            raise ValueError("balanced_n requires batches of the form (inputs, labels).")
-        groups: dict[int, list[int]] = defaultdict(list)
-        for idx, sample in enumerate(flat):
-            groups[_label_to_int(sample[1])].append(idx)
-        n_classes = len(groups)
-        per_class = max(1, n // n_classes)
-        rng = random.Random(seed)
-        indices: list[int] = []
-        for class_indices in groups.values():
-            k = min(per_class, len(class_indices))
-            indices.extend(rng.sample(class_indices, k))
-        rng.shuffle(indices)
-        return [flat[i] for i in indices[:n]]
-
-    return _slice
-
-
-def explicit_indices(indices: list[int]) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
-    """Return samples at the given flat indices."""
-    if not indices:
-        raise ValueError("indices must not be empty.")
-
-    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
-        out_of_range = [i for i in indices if i >= len(flat)]
-        if out_of_range:
-            raise ValueError(
-                f"Explicit indices {out_of_range} are out of range "
-                f"for dataset of {len(flat)} samples."
-            )
-        return [flat[i] for i in indices]
-
-    return _slice
-
 
 # ---------------------------------------------------------------------------
 # Checkpoint selector
