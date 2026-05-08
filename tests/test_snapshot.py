@@ -1,4 +1,4 @@
-"""Tests for snapshot() and load_snapshot() — Sprint 3."""
+"""Tests for snapshot() and load_snapshot()."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def mlp() -> nn.Module:
 
 @pytest.fixture()
 def observer(mlp: nn.Module, tmp_path: Path) -> NeuroInquisitor:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5")
+    obs = NeuroInquisitor(mlp, log_dir=tmp_path)
     yield obs
     if not obs._closed:
         obs.close()
@@ -35,8 +35,7 @@ def test_snapshot_saves_all_parameter_names(
 ) -> None:
     observer.snapshot(epoch=0)
     loaded = observer.load_snapshot(epoch=0)
-    expected_names = {name for name, _ in mlp.named_parameters()}
-    assert set(loaded.keys()) == expected_names
+    assert set(loaded.keys()) == {name for name, _ in mlp.named_parameters()}
 
 
 def test_snapshot_saves_correct_shapes(
@@ -45,40 +44,36 @@ def test_snapshot_saves_correct_shapes(
     observer.snapshot(epoch=0)
     loaded = observer.load_snapshot(epoch=0)
     for name, param in mlp.named_parameters():
-        assert loaded[name].shape == tuple(param.shape), f"Shape mismatch for {name}"
+        assert loaded[name].shape == tuple(param.shape)
+
+
+def test_snapshot_values_match_model(
+    mlp: nn.Module, observer: NeuroInquisitor
+) -> None:
+    observer.snapshot(epoch=0)
+    loaded = observer.load_snapshot(epoch=0)
+    for name, param in mlp.named_parameters():
+        np.testing.assert_allclose(loaded[name], param.detach().cpu().numpy(), rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# Metadata round-trip
+# Metadata round-trip via index
 # ---------------------------------------------------------------------------
 
 
-def test_metadata_stored_as_group_attributes(
-    observer: NeuroInquisitor, tmp_path: Path
-) -> None:
-    import h5py
-
-    meta = {"lr": 0.001, "optimizer": "adam"}
-    observer.snapshot(epoch=1, metadata=meta)
-    observer.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0001"]
-        assert grp.attrs["lr"] == pytest.approx(0.001)
-        assert grp.attrs["optimizer"] == "adam"
-        assert grp.attrs["epoch"] == 1
+def test_metadata_stored_in_index(observer: NeuroInquisitor) -> None:
+    observer.snapshot(epoch=1, metadata={"lr": 0.001, "optimizer": "adam"})
+    entry = observer._index.get_by_epoch(1)
+    assert entry is not None
+    assert entry.metadata["lr"] == 0.001
+    assert entry.metadata["optimizer"] == "adam"
 
 
-def test_metadata_none_stores_epoch_attr(
-    observer: NeuroInquisitor, tmp_path: Path
-) -> None:
-    import h5py
-
+def test_metadata_none_stores_epoch_in_index(observer: NeuroInquisitor) -> None:
     observer.snapshot(epoch=3)
-    observer.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert f["epoch_0003"].attrs["epoch"] == 3
+    entry = observer._index.get_by_epoch(3)
+    assert entry is not None
+    assert entry.epoch == 3
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +95,7 @@ def test_duplicate_epoch_step_raises_value_error(observer: NeuroInquisitor) -> N
 
 def test_different_steps_same_epoch_allowed(observer: NeuroInquisitor) -> None:
     observer.snapshot(epoch=0, step=0)
-    observer.snapshot(epoch=0, step=1)  # should not raise
+    observer.snapshot(epoch=0, step=1)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -115,23 +110,8 @@ def test_gpu_snapshot_moves_to_cpu(tmp_path: Path) -> None:
     obs.snapshot(epoch=0)
     loaded = obs.load_snapshot(epoch=0)
     obs.close()
-
     for arr in loaded.values():
         assert isinstance(arr, np.ndarray)
-
-
-# ---------------------------------------------------------------------------
-# Shape preservation after save and load
-# ---------------------------------------------------------------------------
-
-
-def test_shapes_preserved_after_round_trip(
-    mlp: nn.Module, observer: NeuroInquisitor
-) -> None:
-    observer.snapshot(epoch=0)
-    loaded = observer.load_snapshot(epoch=0)
-    for name, param in mlp.named_parameters():
-        assert loaded[name].shape == tuple(param.shape)
 
 
 # ---------------------------------------------------------------------------
@@ -155,31 +135,31 @@ def test_snapshot_requires_epoch_or_step(observer: NeuroInquisitor) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_step_only_snapshot_creates_correct_group(
+def test_step_only_snapshot_creates_file(
     observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
-    import h5py
-
     observer.snapshot(step=42)
-    observer.close()
+    assert (tmp_path / "step_000042.safetensors").exists()
 
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert "step_000042" in f
-        assert f["step_000042"].attrs["step"] == 42
-        assert "epoch" not in f["step_000042"].attrs
+
+def test_step_only_snapshot_recorded_in_index(observer: NeuroInquisitor) -> None:
+    observer.snapshot(step=42)
+    entries = observer._index.all()
+    assert any(e.step == 42 and e.epoch is None for e in entries)
 
 
 def test_step_only_snapshot_saves_parameters(
-    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
+    mlp: nn.Module, observer: NeuroInquisitor
 ) -> None:
-    import h5py
-
     observer.snapshot(step=0)
-    observer.close()
-
-    expected = {name for name, _ in mlp.named_parameters()}
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert set(f["step_000000"].keys()) == expected
+    # Step-only snapshots are not reachable via load_snapshot(epoch=...)
+    # Verify via load_all_snapshots
+    col = observer.load_all_snapshots()
+    # step-only entry has no epoch, so col.epochs is empty; access via index
+    entry = observer._index.all()[0]
+    path = observer._backend.read_path(entry.file_key)
+    loaded = observer._format.read(path)
+    assert set(loaded.keys()) == {name for name, _ in mlp.named_parameters()}
 
 
 def test_duplicate_step_only_raises_value_error(observer: NeuroInquisitor) -> None:
@@ -231,53 +211,46 @@ def test_metadata_both_reserved_keys_raises(observer: NeuroInquisitor) -> None:
 def test_snapshot_still_usable_after_reserved_key_error(
     observer: NeuroInquisitor,
 ) -> None:
-    # Bug regression: reserved key error must not poison the epoch slot.
     with pytest.raises(ValueError, match="reserved key"):
         observer.snapshot(epoch=0, metadata={"epoch": 99})
-    # Same epoch must succeed now that validation fires before group creation.
-    observer.snapshot(epoch=0)
+    observer.snapshot(epoch=0)  # same epoch must succeed
 
 
-def test_metadata_empty_dict_is_noop(observer: NeuroInquisitor, tmp_path: Path) -> None:
-    import h5py
-
+def test_metadata_empty_dict_stores_no_extras(observer: NeuroInquisitor) -> None:
     observer.snapshot(epoch=0, metadata={})
-    observer.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        # Only the built-in "epoch" attr should be present; no extras.
-        assert set(f["epoch_0000"].attrs.keys()) == {"epoch"}
+    entry = observer._index.get_by_epoch(0)
+    assert entry is not None
+    assert entry.metadata == {}
 
 
 # ---------------------------------------------------------------------------
-# Step attr stored for epoch+step snapshots
+# Both epoch + step stored
 # ---------------------------------------------------------------------------
 
 
-def test_epoch_and_step_both_stored_as_attrs(
+def test_epoch_and_step_both_in_index(observer: NeuroInquisitor) -> None:
+    observer.snapshot(epoch=3, step=50)
+    entry = observer._index.get_by_epoch(3)
+    assert entry is not None
+    assert entry.epoch == 3
+    assert entry.step == 50
+
+
+def test_epoch_and_step_snapshot_file_named_correctly(
     observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
-    import h5py
-
     observer.snapshot(epoch=3, step=50)
-    observer.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0003_step_000050"]
-        assert grp.attrs["epoch"] == 3
-        assert grp.attrs["step"] == 50
+    assert (tmp_path / "epoch_0003_step_000050.safetensors").exists()
 
 
 # ---------------------------------------------------------------------------
-# load_snapshot for step-only snapshot (documents unsupported path)
+# load_snapshot for step-only (unsupported via epoch index)
 # ---------------------------------------------------------------------------
 
 
 def test_load_snapshot_raises_for_step_only_snapshot(
     observer: NeuroInquisitor,
 ) -> None:
-    # step-only snapshots are stored under "step_XXXXXX", not "epoch_XXXX",
-    # so load_snapshot(epoch=...) cannot retrieve them.
     observer.snapshot(step=5)
     with pytest.raises(KeyError):
         observer.load_snapshot(epoch=5)

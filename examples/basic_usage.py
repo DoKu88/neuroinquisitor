@@ -109,14 +109,12 @@ def main() -> None:
     loss_fn = nn.BCEWithLogitsLoss()
 
     log_dir = Path(tempfile.mkdtemp())
-    h5_path = log_dir / "weights.h5"
 
-    print(f"Writing snapshots to: {h5_path}")
+    print(f"Writing snapshots to: {log_dir}/")
 
     observer = NeuroInquisitor(
         model,
         log_dir=log_dir,
-        filename="weights.h5",
         compress=True,
         create_new=True,
     )
@@ -133,17 +131,11 @@ def main() -> None:
         print(f"  epoch {epoch:2d}  loss={loss.item():.4f}")
 
     observer.close()
-    print(f"\nDone. HDF5 file size: {h5_path.stat().st_size:,} bytes")
+    print(f"\nDone. {num_epochs} snapshots written.")
 
     # --- load all snapshots for visualisation ---
-    observer2 = NeuroInquisitor(
-        model,
-        log_dir=log_dir,
-        filename="weights.h5",
-        create_new=False,
-    )
-    weight_history = [observer2.load_snapshot(epoch=e) for e in range(num_epochs)]
-    observer2.close()
+    col = NeuroInquisitor.load(log_dir)
+    weight_history = [col.by_epoch(e) for e in range(num_epochs)]
 
     # --- generate GIF ---
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
