@@ -16,8 +16,9 @@
   - Support per-example and aggregated modes.
 - [ ] `NI-BETA-004` Add dataset slice abstraction.
   - Support selectors for first N, random N with seed, class-balanced N (when labels exist), and explicit indices.
-  - Implement slice selectors as discriminated `pydantic` models.
-  - Persist slice metadata in derived artifacts.
+  - Implement each selector as a plain factory function returning a `Callable[[flat_samples], selected_samples]`. No pydantic models or discriminated unions for slice types.
+  - `ReplaySession` accepts `dataset_slice` (any callable) and an optional `slice_metadata: dict` for provenance. Callers populate `slice_metadata` manually if they want it recorded.
+  - Persist `slice_metadata` verbatim in `ReplayMetadata.dataset_slice`.
 
 ## Testing
 - Add replay integration tests for a small MLP and CNN example.
@@ -26,7 +27,8 @@
 - Add gradient capture tests for classification examples, including shape correctness checks.
 - Add dataset slice tests for deterministic seeded sampling and metadata persistence.
 - Add artifact-size reporting tests for replay outputs.
-- Add `pydantic` validation tests for replay config and dataset-slice selector contracts.
+- Add `pydantic` validation tests for replay config contracts.
+- Add argument validation tests for slice factory functions (e.g. `n=0`, empty indices).
 
 ## Definition of Done
 - `ReplaySession` runs end-to-end for at least one MLP and one CNN path.

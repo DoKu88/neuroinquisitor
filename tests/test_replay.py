@@ -12,15 +12,15 @@ import torch.utils.data
 
 from neuroinquisitor import NeuroInquisitor
 from neuroinquisitor.replay import (
-    BalancedNSlice,
     CheckpointSelector,
-    ExplicitIndicesSlice,
-    FirstNSlice,
-    RandomNSlice,
     ReplayConfig,
     ReplayMetadata,
     ReplayResult,
     ReplaySession,
+    balanced_n,
+    explicit_indices,
+    first_n,
+    random_n,
 )
 
 
@@ -428,7 +428,7 @@ def test_first_n_slice_n_samples(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=FirstNSlice(n=4),
+        dataset_slice=first_n(4),
     )
     result = session.run()
     assert result.metadata is not None
@@ -450,7 +450,7 @@ def test_random_n_slice_deterministic(
             dataloader=mlp_dataloader,
             modules=["fc1"],
             capture=["activations"],
-            dataset_slice=RandomNSlice(n=8, seed=42),
+            dataset_slice=random_n(8, seed=42),
         ).run()
 
     r1 = make()
@@ -472,7 +472,7 @@ def test_random_n_different_seeds_differ(
             dataloader=mlp_dataloader,
             modules=["fc1"],
             capture=["activations"],
-            dataset_slice=RandomNSlice(n=8, seed=seed),
+            dataset_slice=random_n(8, seed=seed),
         ).run()
 
     r1 = make(0)
@@ -492,7 +492,8 @@ def test_balanced_n_slice(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=BalancedNSlice(n=8, seed=0),
+        dataset_slice=balanced_n(8, seed=0),
+        slice_metadata={"kind": "balanced_n", "n": 8, "seed": 0},
     )
     result = session.run()
     assert result.metadata is not None
@@ -513,7 +514,7 @@ def test_explicit_indices_slice(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=ExplicitIndicesSlice(indices=[0, 1, 2, 3]),
+        dataset_slice=explicit_indices([0, 1, 2, 3]),
     )
     result = session.run()
     assert result.metadata is not None
@@ -533,7 +534,7 @@ def test_explicit_indices_out_of_range_raises(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=ExplicitIndicesSlice(indices=[0, 999]),
+        dataset_slice=explicit_indices([0, 999]),
     )
     with pytest.raises(ValueError, match="out of range"):
         session.run()
@@ -551,7 +552,8 @@ def test_slice_metadata_persisted_in_result(
         dataloader=mlp_dataloader,
         modules=["fc1"],
         capture=["activations"],
-        dataset_slice=RandomNSlice(n=6, seed=7),
+        dataset_slice=random_n(6, seed=7),
+        slice_metadata={"kind": "random_n", "n": 6, "seed": 7},
     )
     result = session.run()
     assert result.metadata is not None
@@ -581,7 +583,32 @@ def test_no_slice_uses_all_samples(
 
 
 # ---------------------------------------------------------------------------
-# NI-BETA-001: pydantic validation on config and slice models
+# NI-BETA-004: slice factory validation
+# ---------------------------------------------------------------------------
+
+
+def test_first_n_rejects_zero() -> None:
+    with pytest.raises(ValueError, match="n must be"):
+        first_n(0)
+
+
+def test_random_n_rejects_zero() -> None:
+    with pytest.raises(ValueError, match="n must be"):
+        random_n(0, seed=1)
+
+
+def test_balanced_n_rejects_zero() -> None:
+    with pytest.raises(ValueError, match="n must be"):
+        balanced_n(0, seed=1)
+
+
+def test_explicit_indices_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="indices must not be empty"):
+        explicit_indices([])
+
+
+# ---------------------------------------------------------------------------
+# NI-BETA-001: pydantic validation on ReplayConfig
 # ---------------------------------------------------------------------------
 
 
@@ -617,21 +644,6 @@ def test_checkpoint_selector_rejects_negative_epoch() -> None:
         CheckpointSelector(epoch=-1)
 
 
-def test_first_n_slice_rejects_zero() -> None:
-    with pytest.raises(Exception):
-        FirstNSlice(n=0)
-
-
-def test_first_n_slice_rejects_unknown_fields() -> None:
-    with pytest.raises(Exception):
-        FirstNSlice(n=5, unknown=True)  # type: ignore[call-arg]
-
-
-def test_explicit_indices_slice_rejects_empty() -> None:
-    with pytest.raises(Exception):
-        ExplicitIndicesSlice(indices=[])
-
-
 def test_replay_config_round_trip() -> None:
     config = ReplayConfig(
         checkpoint=CheckpointSelector(epoch=3),
@@ -639,7 +651,6 @@ def test_replay_config_round_trip() -> None:
         capture=["activations", "gradients"],
         activation_reduction="mean",
         gradient_mode="per_example",
-        dataset_slice=RandomNSlice(n=32, seed=99),
     )
     restored = ReplayConfig.model_validate(config.model_dump())
     assert restored == config

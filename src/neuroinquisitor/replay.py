@@ -7,7 +7,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Callable, Iterable, Literal, TypeAlias, Union
+from typing import Any, Callable, Iterable, Literal
 
 import torch
 import torch.nn as nn
@@ -18,56 +18,82 @@ from neuroinquisitor.formats.base import Format
 from neuroinquisitor.loader import load as _load_collection
 
 # ---------------------------------------------------------------------------
-# Dataset slice models — NI-BETA-004
+# Dataset slice factory functions — NI-BETA-004
 # ---------------------------------------------------------------------------
 
 
-class FirstNSlice(BaseModel):
-    """Select the first N samples from the iterable."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["first_n"] = "first_n"
-    n: int = Field(gt=0)
+def _label_to_int(label: torch.Tensor) -> int:
+    if label.ndim == 0 or label.numel() == 1:
+        return int(label.item())
+    return int(label.argmax().item())
 
 
-class RandomNSlice(BaseModel):
-    """Select N samples at random with a fixed seed."""
+def first_n(n: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
+    """Return the first N samples."""
+    if n <= 0:
+        raise ValueError(f"n must be > 0, got {n}")
 
-    model_config = ConfigDict(extra="forbid")
+    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
+        return flat[:n]
 
-    kind: Literal["random_n"] = "random_n"
-    n: int = Field(gt=0)
-    seed: int
+    return _slice
 
 
-class BalancedNSlice(BaseModel):
-    """Select N samples with equal representation per class.
+def random_n(n: int, seed: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
+    """Return N samples chosen at random with a fixed seed."""
+    if n <= 0:
+        raise ValueError(f"n must be > 0, got {n}")
 
-    Requires that each dataloader batch yields ``(inputs, labels)``.
-    Labels may be class-index scalars or one-hot vectors.
+    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
+        rng = random.Random(seed)
+        return rng.sample(flat, min(n, len(flat)))
+
+    return _slice
+
+
+def balanced_n(n: int, seed: int) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
+    """Return up to N samples with equal representation per class.
+
+    Requires batches of the form ``(inputs, labels)``.
     """
+    if n <= 0:
+        raise ValueError(f"n must be > 0, got {n}")
 
-    model_config = ConfigDict(extra="forbid")
+    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
+        if not flat or len(flat[0]) < 2:
+            raise ValueError("balanced_n requires batches of the form (inputs, labels).")
+        groups: dict[int, list[int]] = defaultdict(list)
+        for idx, sample in enumerate(flat):
+            groups[_label_to_int(sample[1])].append(idx)
+        n_classes = len(groups)
+        per_class = max(1, n // n_classes)
+        rng = random.Random(seed)
+        indices: list[int] = []
+        for class_indices in groups.values():
+            k = min(per_class, len(class_indices))
+            indices.extend(rng.sample(class_indices, k))
+        rng.shuffle(indices)
+        return [flat[i] for i in indices[:n]]
 
-    kind: Literal["balanced_n"] = "balanced_n"
-    n: int = Field(gt=0)
-    seed: int
+    return _slice
 
 
-class ExplicitIndicesSlice(BaseModel):
-    """Select specific sample indices (flat, across all batches in order)."""
+def explicit_indices(indices: list[int]) -> Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]:
+    """Return samples at the given flat indices."""
+    if not indices:
+        raise ValueError("indices must not be empty.")
 
-    model_config = ConfigDict(extra="forbid")
+    def _slice(flat: list[tuple[torch.Tensor, ...]]) -> list[tuple[torch.Tensor, ...]]:
+        out_of_range = [i for i in indices if i >= len(flat)]
+        if out_of_range:
+            raise ValueError(
+                f"Explicit indices {out_of_range} are out of range "
+                f"for dataset of {len(flat)} samples."
+            )
+        return [flat[i] for i in indices]
 
-    kind: Literal["explicit"] = "explicit"
-    indices: list[int] = Field(min_length=1)
+    return _slice
 
-
-DatasetSlice: TypeAlias = Annotated[
-    Union[FirstNSlice, RandomNSlice, BalancedNSlice, ExplicitIndicesSlice],
-    Field(discriminator="kind"),
-]
 
 # ---------------------------------------------------------------------------
 # Checkpoint selector
@@ -91,7 +117,7 @@ class ReplayConfig(BaseModel):
     """Serialisable configuration for a ReplaySession.
 
     Captures everything needed to reproduce a replay except the
-    non-serialisable callables (model_factory, dataloader).
+    non-serialisable callables (model_factory, dataloader, dataset_slice).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -103,13 +129,6 @@ class ReplayConfig(BaseModel):
     )
     activation_reduction: Literal["raw", "mean", "pool"] = "raw"
     gradient_mode: Literal["per_example", "aggregated"] = "aggregated"
-    dataset_slice: (
-        Annotated[
-            Union[FirstNSlice, RandomNSlice, BalancedNSlice, ExplicitIndicesSlice],
-            Field(discriminator="kind"),
-        ]
-        | None
-    ) = None
 
 
 # ---------------------------------------------------------------------------
@@ -159,76 +178,26 @@ class ReplayResult:
 # ---------------------------------------------------------------------------
 
 
-def _label_to_int(label: torch.Tensor) -> int:
-    if label.ndim == 0 or label.numel() == 1:
-        return int(label.item())
-    return int(label.argmax().item())
+SliceFn = Callable[[list[tuple[torch.Tensor, ...]]], list[tuple[torch.Tensor, ...]]]
 
 
 def _apply_slice(
     batches: list[tuple[torch.Tensor, ...]],
-    slice_config: (
-        FirstNSlice | RandomNSlice | BalancedNSlice | ExplicitIndicesSlice | None
-    ),
+    slice_fn: SliceFn | None,
 ) -> tuple[list[tuple[torch.Tensor, ...]], int]:
-    """Apply a dataset slice to a list of collected batches.
-
-    Returns ``(selected_batches, n_samples)`` where *selected_batches*
-    contains a single re-stacked batch.
-    """
     if not batches:
         return batches, 0
-
-    if slice_config is None:
+    if slice_fn is None:
         return batches, sum(b[0].shape[0] for b in batches)
 
     n_tensors = len(batches[0])
-
-    # Flatten to individual samples across all batches.
     flat: list[tuple[torch.Tensor, ...]] = []
     for batch in batches:
         batch_size = batch[0].shape[0]
         for i in range(batch_size):
             flat.append(tuple(b[i] for b in batch[:n_tensors]))
 
-    if isinstance(slice_config, FirstNSlice):
-        selected = flat[: slice_config.n]
-
-    elif isinstance(slice_config, RandomNSlice):
-        rng = random.Random(slice_config.seed)
-        k = min(slice_config.n, len(flat))
-        selected = rng.sample(flat, k)
-
-    elif isinstance(slice_config, BalancedNSlice):
-        if n_tensors < 2:
-            raise ValueError(
-                "BalancedNSlice requires batches of the form (inputs, labels)."
-            )
-        groups: dict[int, list[int]] = defaultdict(list)
-        for idx, sample in enumerate(flat):
-            groups[_label_to_int(sample[1])].append(idx)
-        n_classes = len(groups)
-        per_class = max(1, slice_config.n // n_classes)
-        rng = random.Random(slice_config.seed)
-        indices: list[int] = []
-        for class_indices in groups.values():
-            k = min(per_class, len(class_indices))
-            indices.extend(rng.sample(class_indices, k))
-        rng.shuffle(indices)
-        selected = [flat[i] for i in indices[: slice_config.n]]
-
-    elif isinstance(slice_config, ExplicitIndicesSlice):
-        out_of_range = [i for i in slice_config.indices if i >= len(flat)]
-        if out_of_range:
-            raise ValueError(
-                f"Explicit indices {out_of_range} are out of range "
-                f"for dataset of {len(flat)} samples."
-            )
-        selected = [flat[i] for i in slice_config.indices]
-
-    else:
-        selected = flat
-
+    selected = slice_fn(flat)
     if not selected:
         raise ValueError("Dataset slice produced an empty selection.")
 
@@ -255,8 +224,6 @@ class ReplaySession:
         :class:`CheckpointSelector`).
     model_factory:
         Callable returning a freshly-instantiated :class:`~torch.nn.Module`.
-        Called once per :meth:`run` invocation; weights are loaded from the
-        checkpoint via :meth:`~torch.nn.Module.load_state_dict`.
     dataloader:
         Iterable of batches.  Each batch must be a :class:`torch.Tensor` or
         a tuple/list of :class:`torch.Tensor` objects.
@@ -274,7 +241,14 @@ class ReplaySession:
         ``"per_example"`` — full ``(N, ...)`` gradient tensor;
         ``"aggregated"`` — mean over the batch dim → ``(...)``.
     dataset_slice:
-        Optional selection policy.  ``None`` uses all batches.
+        Optional callable ``(flat_samples) -> selected_samples``.  Use the
+        factory helpers :func:`first_n`, :func:`random_n`,
+        :func:`balanced_n`, or :func:`explicit_indices`.  ``None`` uses all
+        batches.
+    slice_metadata:
+        Optional dict stored verbatim in :attr:`ReplayMetadata.dataset_slice`
+        for provenance.  Callers are responsible for populating this when
+        they pass a ``dataset_slice``.
     backend:
         Storage backend for loading snapshots (default ``"local"``).
     format:
@@ -291,15 +265,16 @@ class ReplaySession:
         capture: list[Literal["activations", "gradients", "logits"]],
         activation_reduction: Literal["raw", "mean", "pool"] = "raw",
         gradient_mode: Literal["per_example", "aggregated"] = "aggregated",
-        dataset_slice: (
-            FirstNSlice | RandomNSlice | BalancedNSlice | ExplicitIndicesSlice | None
-        ) = None,
+        dataset_slice: SliceFn | None = None,
+        slice_metadata: dict[str, Any] | None = None,
         backend: str | Backend = "local",
         format: str | Format = "hdf5",
     ) -> None:
         self._run_dir = Path(run)
         self._model_factory = model_factory
         self._dataloader = dataloader
+        self._slice_fn = dataset_slice
+        self._slice_metadata = slice_metadata
         self._backend_spec = backend
         self._format_spec = format
 
@@ -310,7 +285,6 @@ class ReplaySession:
             capture=list(capture),
             activation_reduction=activation_reduction,
             gradient_mode=gradient_mode,
-            dataset_slice=dataset_slice,
         )
 
     # ------------------------------------------------------------------
@@ -476,19 +450,12 @@ class ReplaySession:
     # ------------------------------------------------------------------
 
     def run(self) -> ReplayResult:
-        """Execute the replay and return captured artifacts.
-
-        Returns a :class:`ReplayResult` whose ``activations`` and
-        ``gradients`` fields are ``dict[str, torch.Tensor]`` keyed by
-        module name, and ``logits`` is a plain ``torch.Tensor | None``.
-        """
+        """Execute the replay and return captured artifacts."""
         model = self._load_model()
         self._validate_modules(model)
 
         raw_batches = self._collect_batches()
-        selected_batches, n_samples = _apply_slice(
-            raw_batches, self.config.dataset_slice
-        )
+        selected_batches, n_samples = _apply_slice(raw_batches, self._slice_fn)
 
         activations, gradients, logits = self._run_capture(model, selected_batches)
 
@@ -512,11 +479,7 @@ class ReplaySession:
             capture=list(self.config.capture),
             activation_reduction=self.config.activation_reduction,
             gradient_mode=self.config.gradient_mode,
-            dataset_slice=(
-                self.config.dataset_slice.model_dump()
-                if self.config.dataset_slice is not None
-                else None
-            ),
+            dataset_slice=self._slice_metadata,
             n_samples=n_samples,
             artifact_sizes=artifact_sizes,
         )
