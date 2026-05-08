@@ -129,6 +129,31 @@ def _apply_slice(
 
 
 # ---------------------------------------------------------------------------
+# Hook callables
+# ---------------------------------------------------------------------------
+
+
+class _ActHook:
+    def __init__(self, buf: dict[str, torch.Tensor], name: str) -> None:
+        self._buf = buf
+        self._name = name
+
+    def __call__(self, _mod: nn.Module, _inp: Any, out: Any) -> None:
+        t = out if isinstance(out, torch.Tensor) else out[0]
+        self._buf[self._name] = t.detach()
+
+
+class _GradHook:
+    def __init__(self, buf: dict[str, torch.Tensor], name: str) -> None:
+        self._buf = buf
+        self._name = name
+
+    def __call__(self, _mod: nn.Module, _gin: Any, gout: Any) -> None:
+        if gout[0] is not None:
+            self._buf[self._name] = gout[0].detach()
+
+
+# ---------------------------------------------------------------------------
 # ReplaySession — NI-BETA-001 / NI-BETA-002 / NI-BETA-003
 # ---------------------------------------------------------------------------
 
@@ -293,37 +318,17 @@ class ReplaySession:
             grad_buf: dict[str, torch.Tensor] = {}
             handles: list[Any] = []
 
-            if do_act:
-                for name, module in model.named_modules():
-                    if name in self.config.modules:
-
-                        def _act_hook(
-                            _mod: nn.Module,
-                            _inp: Any,
-                            out: Any,
-                            _n: str = name,
-                        ) -> None:
-                            t = out if isinstance(out, torch.Tensor) else out[0]
-                            act_buf[_n] = t.detach()
-
-                        handles.append(module.register_forward_hook(_act_hook))
-
-            if do_grad:
-                for name, module in model.named_modules():
-                    if name in self.config.modules:
-
-                        def _grad_hook(
-                            _mod: nn.Module,
-                            _gin: Any,
-                            gout: Any,
-                            _n: str = name,
-                        ) -> None:
-                            if gout[0] is not None:
-                                grad_buf[_n] = gout[0].detach()
-
-                        handles.append(
-                            module.register_full_backward_hook(_grad_hook)
-                        )
+            for name, module in model.named_modules():
+                if name not in self.config.modules:
+                    continue
+                if do_act:
+                    handles.append(
+                        module.register_forward_hook(_ActHook(act_buf, name))
+                    )
+                if do_grad:
+                    handles.append(
+                        module.register_full_backward_hook(_GradHook(grad_buf, name))
+                    )
 
             try:
                 if do_grad:
@@ -337,15 +342,11 @@ class ReplaySession:
                 for h in handles:
                     h.remove()
 
-            if do_act:
-                for m in self.config.modules:
-                    if m in act_buf:
-                        all_activations[m].append(act_buf[m])
-
-            if do_grad:
-                for m in self.config.modules:
-                    if m in grad_buf:
-                        all_gradients[m].append(grad_buf[m])
+            for m in self.config.modules:
+                if do_act and m in act_buf:
+                    all_activations[m].append(act_buf[m])
+                if do_grad and m in grad_buf:
+                    all_gradients[m].append(grad_buf[m])
 
             if do_logits:
                 all_logits.append(logits.detach())
