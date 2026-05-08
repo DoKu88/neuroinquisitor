@@ -1,8 +1,11 @@
 """CIFAR-10 classification with weight tracking via NeuroInquisitor.
 
 Trains a CNN on CIFAR-10, snapshots weights each epoch, then generates a video
-showing how the filters evolve. conv1 filters are rendered as RGB colour patches
-so you can watch edge and colour detectors form from random noise.
+with four panels:
+  1. Conv1 RGB filters — fixed per-filter bounds so weight growth is visible.
+  2. Conv2 per-filter ‖W‖₂ heatmap — sign-cancellation-free.
+  3. FC1 neuron row-norms over time — growing (256 × epochs) heatmap.
+  4. Conv1 |W_t − W_0| delta — visibly grows each epoch.
 
 Run:
     python examples/cifar10_example.py
@@ -38,7 +41,8 @@ class CIFAR10Net(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        self.conv1 = nn.Conv2d(3,  32, kernel_size=3, padding=1)
+        # 5×5 first conv: large enough for edge/colour detectors to be readable
+        self.conv1 = nn.Conv2d(3,  32, kernel_size=5, padding=2)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(2)
@@ -61,23 +65,25 @@ class CIFAR10Net(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Layers to show in the video
-# ---------------------------------------------------------------------------
-
-LAYERS_TO_PLOT = [
-    ("conv1.weight", "Conv1 filters  (32×3×3×3)  — RGB"),
-    ("conv2.weight", "Conv2 filters  (64×32×3×3) — ch-mean"),
-    ("fc1.weight",   "FC1 weights    (256×2048)"),
-    ("fc2.weight",   "FC2 weights    (10×256)"),
-]
-
-
-# ---------------------------------------------------------------------------
 # Weight rendering helpers
 # ---------------------------------------------------------------------------
 
-def _render_rgb_filters(weight: np.ndarray) -> np.ndarray:
-    """Tile (out, 3, H, W) filters as a grid of small RGB patches, normalised per-filter."""
+def _compute_conv1_filter_lims(
+    weight_history: list[dict[str, np.ndarray]],
+) -> list[tuple[float, float]]:
+    """Fixed (lo, hi) per filter across ALL epochs so growth is visible."""
+    stacked = np.stack([snap["conv1.weight"] for snap in weight_history])  # (T, 32, 3, H, W)
+    return [
+        (float(stacked[:, i].min()), float(stacked[:, i].max()))
+        for i in range(stacked.shape[1])
+    ]
+
+
+def _render_rgb_filters(
+    weight: np.ndarray,
+    per_filter_lims: list[tuple[float, float]],
+) -> np.ndarray:
+    """Tile (out, 3, H, W) filters as an RGB grid with fixed per-filter bounds."""
     out_ch, _, H, W = weight.shape
     cols = math.ceil(math.sqrt(out_ch))
     rows = math.ceil(out_ch / cols)
@@ -86,32 +92,47 @@ def _render_rgb_filters(weight: np.ndarray) -> np.ndarray:
     for i in range(out_ch):
         r, c = divmod(i, cols)
         filt = weight[i].transpose(1, 2, 0).copy()  # (H, W, 3)
-        lo, hi = filt.min(), filt.max()
-        filt = (filt - lo) / (hi - lo + 1e-8)
+        lo, hi = per_filter_lims[i]
+        filt = np.clip((filt - lo) / (hi - lo + 1e-8), 0.0, 1.0)
         canvas[r * (H + pad): r * (H + pad) + H, c * (W + pad): c * (W + pad) + W] = filt
     return canvas
 
 
-def _render_gray_filters(weight: np.ndarray) -> np.ndarray:
-    """Tile (out, in, H, W) filters as a 2-D grid, averaged over input channels."""
-    out_ch, _in_ch, H, W = weight.shape
-    w = weight.mean(axis=1)
+def _render_delta_rgb(
+    weight: np.ndarray,
+    weight_0: np.ndarray,
+    vmax: float,
+) -> np.ndarray:
+    """Tile |W_t − W_0| per filter as an RGB grid normalised by vmax."""
+    delta = np.abs(weight - weight_0)
+    out_ch, _, H, W = delta.shape
     cols = math.ceil(math.sqrt(out_ch))
     rows = math.ceil(out_ch / cols)
     pad = 1
-    canvas = np.full((rows * (H + pad) - pad, cols * (W + pad) - pad), np.nan)
-    for i, filt in enumerate(w):
+    canvas = np.zeros((rows * (H + pad) - pad, cols * (W + pad) - pad, 3))
+    for i in range(out_ch):
         r, c = divmod(i, cols)
+        filt = np.clip(delta[i].transpose(1, 2, 0) / (vmax + 1e-8), 0.0, 1.0)
         canvas[r * (H + pad): r * (H + pad) + H, c * (W + pad): c * (W + pad) + W] = filt
     return canvas
 
 
-def _preprocess(key: str, weight: np.ndarray) -> np.ndarray:
-    if weight.ndim == 4 and weight.shape[1] == 3:
-        return _render_rgb_filters(weight)
-    if weight.ndim == 4:
-        return _render_gray_filters(weight)
-    return weight
+def _render_conv2_norm_heatmap(weight: np.ndarray) -> np.ndarray:
+    """Per-filter ‖W‖₂ for (64, in, H, W) as an 8×8 grid."""
+    norms = np.sqrt((weight ** 2).sum(axis=(1, 2, 3)))  # (out_ch,)
+    side = math.ceil(math.sqrt(len(norms)))
+    padded = np.full(side * side, np.nan)
+    padded[: len(norms)] = norms
+    return padded.reshape(side, side)
+
+
+def _build_fc1_timeline(weight_history: list[dict[str, np.ndarray]]) -> np.ndarray:
+    """Return (256, num_epochs) matrix of per-neuron row-norms."""
+    row_norms = np.array([
+        np.linalg.norm(snap["fc1.weight"], axis=1)
+        for snap in weight_history
+    ])  # (num_epochs, 256)
+    return row_norms.T  # (256, num_epochs)
 
 
 # ---------------------------------------------------------------------------
@@ -125,47 +146,70 @@ def _make_video(
     fps: int = 4,
 ) -> Path:
     n_frames = len(weight_history)
-    n_panels = len(LAYERS_TO_PLOT)
+    weight_0 = weight_history[0]
 
-    rendered: list[list[np.ndarray]] = [
-        [_preprocess(k, snap[k]) for k, _ in LAYERS_TO_PLOT]
+    # Fixed colour limits computed once across all frames
+    conv1_lims = _compute_conv1_filter_lims(weight_history)
+
+    conv2_heatmaps = [_render_conv2_norm_heatmap(snap["conv2.weight"]) for snap in weight_history]
+    conv2_vmax = float(max(float(h[~np.isnan(h)].max()) for h in conv2_heatmaps))
+
+    fc1_timeline = _build_fc1_timeline(weight_history)  # (256, num_epochs)
+    fc1_vmax = float(fc1_timeline.max())
+
+    delta_vmax = float(max(
+        np.abs(snap["conv1.weight"] - weight_0["conv1.weight"]).max()
         for snap in weight_history
-    ]
+    ))
 
-    # Colour limits — fixed per layer; RGB panels handled separately
-    vlims: list[tuple[float, float] | None] = []
-    for i, (key, _) in enumerate(LAYERS_TO_PLOT):
-        arr0 = rendered[0][i]
-        if arr0.ndim == 3:  # RGB
-            vlims.append(None)
-        else:
-            flat = np.concatenate([f[i].ravel() for f in rendered])
-            abs_max = float(np.nanmax(np.abs(flat))) or 1.0
-            vlims.append((-abs_max, abs_max))
+    conv1_rendered = [_render_rgb_filters(snap["conv1.weight"], conv1_lims) for snap in weight_history]
+    delta_rendered = [_render_delta_rgb(snap["conv1.weight"], weight_0["conv1.weight"], delta_vmax) for snap in weight_history]
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), constrained_layout=True)
-    if n_panels == 1:
-        axes = [axes]
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4), constrained_layout=True)
 
-    images = []
-    for ax, (key, label), arr, vlim in zip(axes, LAYERS_TO_PLOT, rendered[0], vlims):
-        if vlim is None:
-            im = ax.imshow(arr, interpolation="nearest")
-        else:
-            im = ax.imshow(arr, aspect="auto", cmap="RdBu_r",
-                           vmin=vlim[0], vmax=vlim[1], interpolation="nearest")
-            fig.colorbar(im, ax=ax, shrink=0.8, label="weight value")
-        ax.set_title(label, fontsize=8)
-        images.append(im)
+    # Panel 0: Conv1 RGB filters (fixed per-filter bounds)
+    im_conv1 = axes[0].imshow(conv1_rendered[0], interpolation="nearest")
+    axes[0].set_title("Conv1 — RGB filters (fixed bounds)", fontsize=8)
+    axes[0].axis("off")
+
+    # Panel 1: Conv2 per-filter ‖W‖₂ heatmap
+    im_conv2 = axes[1].imshow(conv2_heatmaps[0], cmap="viridis", vmin=0, vmax=conv2_vmax, interpolation="nearest")
+    fig.colorbar(im_conv2, ax=axes[1], shrink=0.8, label="‖W‖₂")
+    axes[1].set_title("Conv2 — per-filter ‖W‖₂", fontsize=8)
+    axes[1].axis("off")
+
+    # Panel 2: FC1 row-norm timeline — grows one column per epoch
+    fc1_init = np.full_like(fc1_timeline, np.nan)
+    fc1_init[:, 0] = fc1_timeline[:, 0]
+    im_fc1 = axes[2].imshow(
+        fc1_init, aspect="auto", cmap="plasma",
+        vmin=0, vmax=fc1_vmax, interpolation="nearest",
+    )
+    fig.colorbar(im_fc1, ax=axes[2], shrink=0.8, label="‖row‖₂")
+    axes[2].set_title("FC1 — neuron row-norms over epochs", fontsize=8)
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("Neuron index")
+
+    # Panel 3: Conv1 delta from init
+    im_delta = axes[3].imshow(delta_rendered[0], interpolation="nearest")
+    axes[3].set_title("Conv1  |W_t − W_0|  (init delta)", fontsize=8)
+    axes[3].axis("off")
 
     title_text = fig.suptitle("", fontsize=12)
 
     def update(frame: int) -> list:
         acc = accuracy_history[frame] if frame < len(accuracy_history) else 0.0
         title_text.set_text(f"Epoch {frame + 1}  |  Test accuracy: {acc:.1%}")
-        for im, arr in zip(images, rendered[frame]):
-            im.set_data(arr)
-        return [*images, title_text]
+
+        im_conv1.set_data(conv1_rendered[frame])
+        im_conv2.set_data(conv2_heatmaps[frame])
+
+        fc1_data = np.full_like(fc1_timeline, np.nan)
+        fc1_data[:, : frame + 1] = fc1_timeline[:, : frame + 1]
+        im_fc1.set_data(fc1_data)
+
+        im_delta.set_data(delta_rendered[frame])
+        return [im_conv1, im_conv2, im_fc1, im_delta, title_text]
 
     ani = animation.FuncAnimation(
         fig, update, frames=n_frames, interval=1000 // fps, blit=False,

@@ -10,6 +10,15 @@ clean Fourier structure in phase 2 that is completely absent in phase 1.
 Task: learn (a + b) mod p for a prime p, treating it as classification over p classes.
       All p² input pairs form the dataset; ~50% is held out as the test split.
 
+The video shows four panels that capture the grokking dynamics:
+  1. Token embedding cosine similarity (P×P) — noisy during memorisation, develops
+     block modular structure when the model generalises.
+  2. Embedding Fourier power spectrum over training (freq × snapshots, growing) —
+     specific frequency modes spike exactly when grokking occurs.
+  3. Component Frobenius norms over training (4 components × snapshots, growing) —
+     weight decay drives grokking; watch norms compress then re-grow.
+  4. Output projection (97×128, fixed bounds) — structure emerges in phase 2.
+
 Run:
     python examples/grokking_example.py
 
@@ -46,6 +55,14 @@ NUM_STEPS = 15_000  # full-batch gradient steps
 SNAPSHOT_EVERY = 150  # → 100 snapshots total
 
 EQ_TOKEN = P        # index for the '=' token; vocabulary size = P + 1
+
+# Components tracked for norm timeline
+COMPONENT_KEYS = [
+    ("token_emb.weight",                               "token_emb"),
+    ("transformer.layers.0.self_attn.in_proj_weight",  "attn_in_proj"),
+    ("transformer.layers.0.linear1.weight",            "ffn_linear1"),
+    ("output_proj.weight",                             "output_proj"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +125,49 @@ class GrokkingTransformer(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Layers to show in the video
+# Weight rendering helpers
 # ---------------------------------------------------------------------------
 
-LAYERS_TO_PLOT = [
-    ("token_emb.weight",                                     "Token embeddings  (98×128)"),
-    ("transformer.layers.0.self_attn.in_proj_weight",        "Attn in-proj      (384×128)"),
-    ("transformer.layers.0.linear1.weight",                  "FFN linear1        (512×128)"),
-    ("output_proj.weight",                                   "Output proj        (97×128)"),
-]
+def _token_cosine_sim(emb_weight: np.ndarray) -> np.ndarray:
+    """(P×P) cosine similarity between the P token embeddings (drops EQ_TOKEN row)."""
+    emb = emb_weight[:P]  # (P, D)
+    norms = np.linalg.norm(emb, axis=1, keepdims=True) + 1e-8
+    normed = emb / norms
+    return normed @ normed.T  # (P, P)
+
+
+def _emb_fourier_power(emb_weight: np.ndarray) -> np.ndarray:
+    """Mean Fourier power over embedding dims, indexed by frequency over token axis.
+
+    Returns shape (P//2,) — DC component dropped so the colourmap isn't dominated
+    by the mean offset.
+    """
+    emb = emb_weight[:P]           # (P, D)
+    fft = np.fft.rfft(emb, axis=0) # (P//2 + 1, D) complex
+    power = (np.abs(fft) ** 2).mean(axis=1)  # (P//2 + 1,)
+    return power[1:]  # drop DC; (P//2,)
+
+
+def _build_fourier_timeline(
+    weight_history: list[dict[str, np.ndarray]],
+) -> np.ndarray:
+    """(P//2, num_snapshots) Fourier power matrix — grows left to right in video."""
+    spectra = np.array([
+        _emb_fourier_power(snap["token_emb.weight"])
+        for snap in weight_history
+    ])  # (num_snapshots, P//2)
+    return spectra.T  # (P//2, num_snapshots)
+
+
+def _build_norm_timeline(
+    weight_history: list[dict[str, np.ndarray]],
+) -> np.ndarray:
+    """(num_components, num_snapshots) Frobenius norm matrix — grows left to right."""
+    norms = np.array([
+        [np.linalg.norm(snap[k]) for k, _ in COMPONENT_KEYS]
+        for snap in weight_history
+    ])  # (num_snapshots, num_components)
+    return norms.T  # (num_components, num_snapshots)
 
 
 # ---------------------------------------------------------------------------
@@ -132,25 +183,64 @@ def _make_video(
     fps: int = 5,
 ) -> Path:
     n_frames = len(weight_history)
-    n_panels = len(LAYERS_TO_PLOT)
 
-    rendered = [[snap[k] for k, _ in LAYERS_TO_PLOT] for snap in weight_history]
+    # --- Pre-compute all data ---
+    cosine_sims = [_token_cosine_sim(snap["token_emb.weight"]) for snap in weight_history]
 
-    vlims: list[tuple[float, float]] = []
-    for i in range(n_panels):
-        flat = np.concatenate([f[i].ravel() for f in rendered])
-        abs_max = float(np.abs(flat).max()) or 1.0
-        vlims.append((-abs_max, abs_max))
+    fourier_timeline = _build_fourier_timeline(weight_history)  # (P//2, num_snapshots)
+    fourier_vmax = float(fourier_timeline.max()) or 1.0
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), constrained_layout=True)
+    norm_timeline = _build_norm_timeline(weight_history)  # (4, num_snapshots)
+    norm_vmax = float(norm_timeline.max()) or 1.0
 
-    images = []
-    for ax, (_, label), arr, (vmin, vmax) in zip(axes, LAYERS_TO_PLOT, rendered[0], vlims):
-        im = ax.imshow(arr, aspect="auto", cmap="RdBu_r",
-                       vmin=vmin, vmax=vmax, interpolation="nearest")
-        fig.colorbar(im, ax=ax, shrink=0.8, label="weight value")
-        ax.set_title(label, fontsize=8)
-        images.append(im)
+    output_projs = [snap["output_proj.weight"] for snap in weight_history]
+    out_abs_max = float(np.abs(np.stack(output_projs)).max()) or 1.0
+
+    # --- Build figure ---
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
+
+    # Panel 0: token embedding cosine similarity
+    im_cos = axes[0].imshow(
+        cosine_sims[0], cmap="RdBu_r", vmin=-1, vmax=1, interpolation="nearest",
+    )
+    fig.colorbar(im_cos, ax=axes[0], shrink=0.8, label="cosine sim")
+    axes[0].set_title(f"Token emb cosine similarity ({P}×{P})", fontsize=8)
+    axes[0].set_xlabel("Token b")
+    axes[0].set_ylabel("Token a")
+
+    # Panel 1: Fourier power spectrum over training (growing)
+    freq_bins = fourier_timeline.shape[0]
+    fourier_init = np.full_like(fourier_timeline, np.nan)
+    fourier_init[:, 0] = fourier_timeline[:, 0]
+    im_fourier = axes[1].imshow(
+        fourier_init, aspect="auto", cmap="plasma",
+        vmin=0, vmax=fourier_vmax, interpolation="nearest",
+    )
+    fig.colorbar(im_fourier, ax=axes[1], shrink=0.8, label="mean |FFT|²")
+    axes[1].set_title("Embedding Fourier power over training", fontsize=8)
+    axes[1].set_xlabel("Snapshot")
+    axes[1].set_ylabel("Frequency (token axis, DC dropped)")
+
+    # Panel 2: Component Frobenius norm timeline (growing)
+    norm_init = np.full_like(norm_timeline, np.nan)
+    norm_init[:, 0] = norm_timeline[:, 0]
+    im_norm = axes[2].imshow(
+        norm_init, aspect="auto", cmap="viridis",
+        vmin=0, vmax=norm_vmax, interpolation="nearest",
+    )
+    fig.colorbar(im_norm, ax=axes[2], shrink=0.8, label="‖W‖_F")
+    axes[2].set_title("Component Frobenius norms over training", fontsize=8)
+    axes[2].set_xlabel("Snapshot")
+    axes[2].set_yticks(range(len(COMPONENT_KEYS)))
+    axes[2].set_yticklabels([label for _, label in COMPONENT_KEYS], fontsize=7)
+
+    # Panel 3: Output projection (fixed bounds across all frames)
+    im_out = axes[3].imshow(
+        output_projs[0], aspect="auto", cmap="RdBu_r",
+        vmin=-out_abs_max, vmax=out_abs_max, interpolation="nearest",
+    )
+    fig.colorbar(im_out, ax=axes[3], shrink=0.8, label="weight value")
+    axes[3].set_title("Output proj (97×128) — fixed bounds", fontsize=8)
 
     title_text = fig.suptitle("", fontsize=11)
 
@@ -159,9 +249,19 @@ def _make_video(
         tr = train_acc_history[frame] if frame < len(train_acc_history) else 0.0
         te = test_acc_history[frame]  if frame < len(test_acc_history)  else 0.0
         title_text.set_text(f"Step {step}  |  train acc={tr:.1%}  test acc={te:.1%}")
-        for im, arr in zip(images, rendered[frame]):
-            im.set_data(arr)
-        return [*images, title_text]
+
+        im_cos.set_data(cosine_sims[frame])
+
+        fourier_data = np.full_like(fourier_timeline, np.nan)
+        fourier_data[:, : frame + 1] = fourier_timeline[:, : frame + 1]
+        im_fourier.set_data(fourier_data)
+
+        norm_data = np.full_like(norm_timeline, np.nan)
+        norm_data[:, : frame + 1] = norm_timeline[:, : frame + 1]
+        im_norm.set_data(norm_data)
+
+        im_out.set_data(output_projs[frame])
+        return [im_cos, im_fourier, im_norm, im_out, title_text]
 
     ani = animation.FuncAnimation(
         fig, update, frames=n_frames, interval=1000 // fps, blit=False,
