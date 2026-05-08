@@ -299,7 +299,7 @@ def main() -> None:
 
     observer = NeuroInquisitor(model, log_dir=run_dir, compress=True, create_new=True)
 
-    num_epochs = 60
+    num_epochs = 2
     train_loss_history: list[float] = []
     test_loss_history: list[float] = []
     accuracy_history: list[float] = []

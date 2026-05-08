@@ -65,8 +65,9 @@ def test_index_abc_exported() -> None:
     from neuroinquisitor import Index, IndexEntry, JSONIndex
 
     assert issubclass(JSONIndex, Index)
-    assert hasattr(IndexEntry, "epoch")
-    assert hasattr(IndexEntry, "step")
-    assert hasattr(IndexEntry, "file_key")
-    assert hasattr(IndexEntry, "layers")
-    assert hasattr(IndexEntry, "metadata")
+    entry = IndexEntry()
+    assert hasattr(entry, "epoch")
+    assert hasattr(entry, "step")
+    assert hasattr(entry, "file_key")
+    assert hasattr(entry, "layers")
+    assert hasattr(entry, "metadata")
