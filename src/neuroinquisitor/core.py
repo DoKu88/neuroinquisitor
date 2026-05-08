@@ -14,6 +14,7 @@ from neuroinquisitor.backends.base import Backend
 from neuroinquisitor.backends.local import LocalBackend
 from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.formats.base import Format
+from neuroinquisitor.formats.hdf5_format import HDF5Format
 from neuroinquisitor.formats.safetensors_format import SafeTensorsFormat
 from neuroinquisitor.index.base import IndexEntry
 from neuroinquisitor.index.json_index import JSONIndex
@@ -28,6 +29,7 @@ _BACKENDS: dict[str, type[Backend]] = {
 }
 _FORMATS: dict[str, type[Format]] = {
     "safetensors": SafeTensorsFormat,
+    "hdf5": HDF5Format,
 }
 
 
@@ -186,7 +188,7 @@ class NeuroInquisitor:
         if metadata:
             file_metadata.update(metadata)
 
-        data = self._format.write(params, file_metadata)
+        data = self._format.write(params, file_metadata, compress=self._compress)
         self._backend.write(file_key, data)
 
         layer_names = list(params.keys())

@@ -34,6 +34,7 @@ class SafeTensorsFormat(Format):
         self,
         params: dict[str, np.ndarray],
         metadata: dict[str, object],
+        compress: bool = False,
     ) -> bytes:
         # SafeTensors metadata values must be strings.
         str_meta: dict[str, str] = {k: str(v) for k, v in metadata.items()}

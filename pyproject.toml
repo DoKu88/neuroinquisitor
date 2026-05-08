@@ -13,6 +13,7 @@ dependencies = [
     "torch>=2.0",
     "numpy>=1.24",
     "safetensors>=0.4",
+    "h5py>=3.9",
 ]
 
 [project.optional-dependencies]

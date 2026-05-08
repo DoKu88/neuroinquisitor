@@ -199,7 +199,7 @@ def test_unknown_backend_raises(simple_model: nn.Module, tmp_path: Path) -> None
 
 def test_unknown_format_raises(simple_model: nn.Module, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unknown format"):
-        NeuroInquisitor(simple_model, log_dir=tmp_path, format="hdf5")
+        NeuroInquisitor(simple_model, log_dir=tmp_path, format="parquet")
 
 
 def test_custom_backend_instance_accepted(

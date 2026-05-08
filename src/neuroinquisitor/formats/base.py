@@ -26,6 +26,7 @@ class Format(ABC):
         self,
         params: dict[str, np.ndarray],
         metadata: dict[str, object],
+        compress: bool = False,
     ) -> bytes:
         """Serialise *params* and *metadata* to a byte string."""
 

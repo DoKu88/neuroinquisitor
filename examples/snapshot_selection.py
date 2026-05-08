@@ -88,7 +88,7 @@ def _make_gif(
     if n_layers == 1:
         axes = [axes]
 
-    fig.suptitle(title, fontsize=12, y=1.02)
+    fig.suptitle(f"{title} — Epoch {epochs[0]}", fontsize=12)
 
     images = []
     first = cache[epochs[0]]
@@ -107,14 +107,12 @@ def _make_gif(
         ax.set_ylabel("output dim")
         images.append(im)
 
-    epoch_label = fig.text(0.5, -0.02, "", ha="center", va="top", fontsize=11)
-
     def update(frame_idx: int) -> list:
         epoch = epochs[frame_idx]
-        epoch_label.set_text(f"Epoch {epoch}")
+        fig.suptitle(f"{title} — Epoch {epoch}", fontsize=12)
         for im, layer in zip(images, layers):
             im.set_data(cache[epoch][layer])   # in-memory, no disk I/O
-        return [*images, epoch_label]
+        return images
 
     ani = animation.FuncAnimation(
         fig, update, frames=len(epochs), interval=1000 // fps, blit=False,
@@ -142,7 +140,13 @@ def main() -> None:
     log_dir = Path(tempfile.mkdtemp())
 
     print("Training TinyMLP for 40 epochs …")
-    observer = NeuroInquisitor(model, log_dir=log_dir, compress=True, create_new=True)
+    observer = NeuroInquisitor(
+        model,
+        log_dir=log_dir,
+        format="hdf5",
+        compress=True,
+        create_new=True,
+    )
 
     num_epochs = 40
     for epoch in range(num_epochs):
@@ -156,7 +160,7 @@ def main() -> None:
     print(f"Snapshots written to {log_dir}/\n")
 
     # load_all_snapshots reads only the index — no tensor files opened yet
-    col = NeuroInquisitor.load(log_dir)
+    col = NeuroInquisitor.load(log_dir, format="hdf5")
     print(f"SnapshotCollection: {col}\n")
 
     ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
