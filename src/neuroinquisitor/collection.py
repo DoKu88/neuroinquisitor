@@ -72,7 +72,7 @@ class SnapshotCollection:
     def layers(self) -> list[str]:
         """Parameter names available in this collection.
 
-        Reads only the SafeTensors header of the first matching snapshot
+        Reads only the header of the first matching snapshot
         (no tensor data) and applies the layer filter.
         """
         active = self._active_entries()

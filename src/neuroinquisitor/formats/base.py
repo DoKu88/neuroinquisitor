@@ -13,13 +13,13 @@ class Format(ABC):
 
     Implementors
     ------------
-    :class:`~neuroinquisitor.formats.safetensors.SafeTensorsFormat`
+    :class:`~neuroinquisitor.formats.hdf5_format.HDF5Format`
     """
 
     @property
     @abstractmethod
     def extension(self) -> str:
-        """File extension including the leading dot, e.g. ``".safetensors"``."""
+        """File extension including the leading dot, e.g. ``".h5"``."""
 
     @abstractmethod
     def write(

@@ -3,7 +3,7 @@
 from neuroinquisitor.backends import Backend, LocalBackend
 from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.core import NeuroInquisitor
-from neuroinquisitor.formats import Format, HDF5Format, SafeTensorsFormat
+from neuroinquisitor.formats import Format, HDF5Format
 from neuroinquisitor.index import Index, IndexEntry, JSONIndex
 
 __version__ = "0.1.0"
@@ -14,7 +14,6 @@ __all__ = [
     "LocalBackend",
     "Format",
     "HDF5Format",
-    "SafeTensorsFormat",
     "Index",
     "IndexEntry",
     "JSONIndex",

@@ -151,7 +151,7 @@ def test_repr_shows_backend_and_format(simple_model: nn.Module, tmp_path: Path) 
     obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
     r = repr(obs)
     assert "LocalBackend" in r
-    assert "SafeTensorsFormat" in r
+    assert "HDF5Format" in r
     obs.close()
 
 

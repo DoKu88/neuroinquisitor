@@ -1,4 +1,4 @@
-"""Tests for snapshot() and load_snapshot()."""
+"""Tests for snapshot()."""
 
 from __future__ import annotations
 
@@ -31,27 +31,27 @@ def observer(mlp: nn.Module, tmp_path: Path) -> NeuroInquisitor:
 
 
 def test_snapshot_saves_all_parameter_names(
-    mlp: nn.Module, observer: NeuroInquisitor
+    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(epoch=0)
-    loaded = observer.load_snapshot(epoch=0)
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     assert set(loaded.keys()) == {name for name, _ in mlp.named_parameters()}
 
 
 def test_snapshot_saves_correct_shapes(
-    mlp: nn.Module, observer: NeuroInquisitor
+    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(epoch=0)
-    loaded = observer.load_snapshot(epoch=0)
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     for name, param in mlp.named_parameters():
         assert loaded[name].shape == tuple(param.shape)
 
 
 def test_snapshot_values_match_model(
-    mlp: nn.Module, observer: NeuroInquisitor
+    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(epoch=0)
-    loaded = observer.load_snapshot(epoch=0)
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     for name, param in mlp.named_parameters():
         np.testing.assert_allclose(loaded[name], param.detach().cpu().numpy(), rtol=1e-6)
 
@@ -108,8 +108,8 @@ def test_gpu_snapshot_moves_to_cpu(tmp_path: Path) -> None:
     model = nn.Linear(4, 2).cuda()
     obs = NeuroInquisitor(model, log_dir=tmp_path)
     obs.snapshot(epoch=0)
-    loaded = obs.load_snapshot(epoch=0)
     obs.close()
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     for arr in loaded.values():
         assert isinstance(arr, np.ndarray)
 
@@ -139,7 +139,7 @@ def test_step_only_snapshot_creates_file(
     observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(step=42)
-    assert (tmp_path / "step_000042.safetensors").exists()
+    assert (tmp_path / "step_000042.h5").exists()
 
 
 def test_step_only_snapshot_recorded_in_index(observer: NeuroInquisitor) -> None:
@@ -149,16 +149,14 @@ def test_step_only_snapshot_recorded_in_index(observer: NeuroInquisitor) -> None
 
 
 def test_step_only_snapshot_saves_parameters(
-    mlp: nn.Module, observer: NeuroInquisitor
+    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(step=0)
-    # Step-only snapshots are not reachable via load_snapshot(epoch=...)
-    # Verify via load_all_snapshots
-    col = observer.load_all_snapshots()
-    # step-only entry has no epoch, so col.epochs is empty; access via index
-    entry = observer._index.all()[0]
-    path = observer._backend.read_path(entry.file_key)
-    loaded = observer._format.read(path)
+    col = NeuroInquisitor.load(tmp_path)
+    # step-only entry has no epoch; read via the index directly
+    entry = col._index.all()[0]
+    path = col._backend.read_path(entry.file_key)
+    loaded = col._format.read(path)
     assert set(loaded.keys()) == {name for name, _ in mlp.named_parameters()}
 
 
@@ -169,12 +167,12 @@ def test_duplicate_step_only_raises_value_error(observer: NeuroInquisitor) -> No
 
 
 # ---------------------------------------------------------------------------
-# load_snapshot after observer.close()
+# Load works after observer.close()
 # ---------------------------------------------------------------------------
 
 
-def test_load_snapshot_works_after_close(
-    mlp: nn.Module, observer: NeuroInquisitor
+def test_load_works_after_close(
+    mlp: nn.Module, observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     original = {
         name: param.detach().cpu().numpy().copy()
@@ -183,7 +181,7 @@ def test_load_snapshot_works_after_close(
     observer.snapshot(epoch=0)
     observer.close()
 
-    loaded = observer.load_snapshot(epoch=0)
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     for name, arr in original.items():
         np.testing.assert_allclose(loaded[name], arr, rtol=1e-6)
 
@@ -240,20 +238,20 @@ def test_epoch_and_step_snapshot_file_named_correctly(
     observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(epoch=3, step=50)
-    assert (tmp_path / "epoch_0003_step_000050.safetensors").exists()
+    assert (tmp_path / "epoch_0003_step_000050.h5").exists()
 
 
 # ---------------------------------------------------------------------------
-# load_snapshot for step-only (unsupported via epoch index)
+# Load raises for step-only snapshot when queried by epoch
 # ---------------------------------------------------------------------------
 
 
-def test_load_snapshot_raises_for_step_only_snapshot(
-    observer: NeuroInquisitor,
+def test_load_raises_for_step_only_snapshot(
+    observer: NeuroInquisitor, tmp_path: Path
 ) -> None:
     observer.snapshot(step=5)
     with pytest.raises(KeyError):
-        observer.load_snapshot(epoch=5)
+        NeuroInquisitor.load(tmp_path).by_epoch(5)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +263,6 @@ def test_snapshot_model_with_no_parameters(tmp_path: Path) -> None:
     model = torch.nn.Identity()
     obs = NeuroInquisitor(model, log_dir=tmp_path)
     obs.snapshot(epoch=0)
-    loaded = obs.load_snapshot(epoch=0)
     obs.close()
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     assert loaded == {}

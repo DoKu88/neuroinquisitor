@@ -20,7 +20,6 @@ Requires matplotlib:
 
 from __future__ import annotations
 
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -137,7 +136,9 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     loss_fn = nn.BCEWithLogitsLoss()
 
-    log_dir = Path(tempfile.mkdtemp())
+    ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    log_dir = Path(__file__).parent.parent / "outputs" / "network_weights" / ts
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     print("Training TinyMLP for 40 epochs …")
     observer = NeuroInquisitor(
@@ -159,11 +160,9 @@ def main() -> None:
     observer.close()
     print(f"Snapshots written to {log_dir}/\n")
 
-    # load_all_snapshots reads only the index — no tensor files opened yet
     col = NeuroInquisitor.load(log_dir, format="hdf5")
     print(f"SnapshotCollection: {col}\n")
 
-    ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     out_dir = Path(__file__).parent.parent / "outputs" / "snapshot_selection"
     out_dir.mkdir(parents=True, exist_ok=True)
 

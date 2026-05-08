@@ -10,7 +10,7 @@ class Backend(ABC):
     """Abstracts where snapshot files are stored (local filesystem, S3, …).
 
     Each snapshot is stored under an opaque *key* string (e.g.
-    ``"epoch_0000.safetensors"``).  The backend is responsible for
+    ``"epoch_0000.h5"``).  The backend is responsible for
     translating keys to actual storage locations.
 
     Implementors

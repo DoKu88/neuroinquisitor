@@ -11,42 +11,18 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from neuroinquisitor.backends.base import Backend
-from neuroinquisitor.backends.local import LocalBackend
 from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.formats.base import Format
-from neuroinquisitor.formats.hdf5_format import HDF5Format
-from neuroinquisitor.formats.safetensors_format import SafeTensorsFormat
 from neuroinquisitor.index.base import IndexEntry
 from neuroinquisitor.index.json_index import JSONIndex
+from neuroinquisitor.loader import load as _load
+from neuroinquisitor.loader import resolve_backend as _resolve_backend
+from neuroinquisitor.loader import resolve_format as _resolve_format
 
 if TYPE_CHECKING:
     import torch.nn as nn
 
 logger = logging.getLogger(__name__)
-
-_BACKENDS: dict[str, type[Backend]] = {
-    "local": LocalBackend,
-}
-_FORMATS: dict[str, type[Format]] = {
-    "safetensors": SafeTensorsFormat,
-    "hdf5": HDF5Format,
-}
-
-
-def _resolve_backend(spec: str | Backend, log_dir: Path) -> Backend:
-    if isinstance(spec, Backend):
-        return spec
-    if spec not in _BACKENDS:
-        raise ValueError(f"Unknown backend {spec!r}. Available: {sorted(_BACKENDS)}")
-    return _BACKENDS[spec](log_dir)
-
-
-def _resolve_format(spec: str | Format) -> Format:
-    if isinstance(spec, Format):
-        return spec
-    if spec not in _FORMATS:
-        raise ValueError(f"Unknown format {spec!r}. Available: {sorted(_FORMATS)}")
-    return _FORMATS[spec]()
 
 
 class NeuroInquisitor:
@@ -59,8 +35,7 @@ class NeuroInquisitor:
     log_dir:
         Directory where snapshots and the index are written.
     compress:
-        Hint to the format to use compression.  Has no effect for
-        ``SafeTensorsFormat`` (which does not support compression).
+        Hint to the format to use compression.
     create_new:
         ``True``  → start a fresh run; raises :exc:`FileExistsError` if
         an index already exists in *log_dir*.
@@ -70,7 +45,7 @@ class NeuroInquisitor:
         Storage backend.  Pass ``"local"`` (default) or a
         :class:`~neuroinquisitor.backends.base.Backend` instance.
     format:
-        Snapshot file format.  Pass ``"safetensors"`` (default) or a
+        Snapshot file format.  Pass ``"hdf5"`` (default) or a
         :class:`~neuroinquisitor.formats.base.Format` instance.
     """
 
@@ -81,7 +56,7 @@ class NeuroInquisitor:
         compress: bool = False,
         create_new: bool = True,
         backend: str | Backend = "local",
-        format: str | Format = "safetensors",
+        format: str | Format = "hdf5",
     ) -> None:
         self._model = model
         self._compress = compress
@@ -207,41 +182,37 @@ class NeuroInquisitor:
     # Read-back
     # ------------------------------------------------------------------
 
-    def load_snapshot(self, epoch: int) -> dict[str, np.ndarray]:
-        """Load a single snapshot by epoch index."""
-        entry = self._index.get_by_epoch(epoch)
-        if entry is None:
-            available = [e.epoch for e in self._index.all() if e.epoch is not None]
-            raise KeyError(
-                f"No snapshot for epoch {epoch}. Available epochs: {sorted(available)}"
-            )
-        path = self._backend.read_path(entry.file_key)
-        return self._format.read(path)
-
-    def load_all_snapshots(self) -> SnapshotCollection:
-        """Return a lazy :class:`~neuroinquisitor.collection.SnapshotCollection`.
-
-        Only the in-memory index is consulted — no tensor files are opened
-        until the caller requests actual weight data.
-        """
-        return SnapshotCollection(self._backend, self._format, self._index)
-
     @classmethod
     def load(
         cls,
         log_dir: str | os.PathLike[str],
         backend: str | Backend = "local",
-        format: str | Format = "safetensors",
+        format: str | Format = "hdf5",
+        epochs: int | list[int] | range | None = None,
+        layers: str | list[str] | None = None,
     ) -> SnapshotCollection:
         """Open a run directory and return a lazy :class:`~neuroinquisitor.collection.SnapshotCollection`.
 
         Does not require a model — useful for post-training analysis.
+
+        Parameters
+        ----------
+        log_dir:
+            Directory containing snapshots and the index file.
+        backend:
+            Storage backend — ``"local"`` (default) or a
+            :class:`~neuroinquisitor.backends.base.Backend` instance.
+        format:
+            Snapshot file format — ``"hdf5"`` (default) or a
+            :class:`~neuroinquisitor.formats.base.Format` instance.
+        epochs:
+            Restrict to a single epoch, a list of indices, or a :class:`range`.
+            ``None`` (default) includes all epochs.
+        layers:
+            Restrict to a single layer name or a list of names.
+            ``None`` (default) includes all layers.
         """
-        root = Path(log_dir)
-        _backend = _resolve_backend(backend, root)
-        _format = _resolve_format(format)
-        _index = JSONIndex.load(_backend)
-        return SnapshotCollection(_backend, _format, _index)
+        return _load(log_dir, backend=backend, format=format, epochs=epochs, layers=layers)
 
     # ------------------------------------------------------------------
     # Lifecycle

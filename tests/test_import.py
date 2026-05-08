@@ -20,7 +20,7 @@ def test_dunder_all_contains_expected_names() -> None:
         "Backend",
         "LocalBackend",
         "Format",
-        "SafeTensorsFormat",
+        "HDF5Format",
         "Index",
         "IndexEntry",
         "JSONIndex",
@@ -38,7 +38,7 @@ def test_all_names_actually_importable() -> None:
 def test_neuroinquisitor_public_methods() -> None:
     from neuroinquisitor import NeuroInquisitor
 
-    for method in ("snapshot", "load_snapshot", "load_all_snapshots", "load", "close"):
+    for method in ("snapshot", "load", "close"):
         assert hasattr(NeuroInquisitor, method), f"NeuroInquisitor missing method {method!r}"
 
 
@@ -56,9 +56,9 @@ def test_backend_abc_exported() -> None:
 
 
 def test_format_abc_exported() -> None:
-    from neuroinquisitor import Format, SafeTensorsFormat
+    from neuroinquisitor import Format, HDF5Format
 
-    assert issubclass(SafeTensorsFormat, Format)
+    assert issubclass(HDF5Format, Format)
 
 
 def test_index_abc_exported() -> None:

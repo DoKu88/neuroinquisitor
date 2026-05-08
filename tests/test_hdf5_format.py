@@ -238,26 +238,30 @@ class TestNeuroInquisitorHDF5:
         assert (tmp_path / "epoch_0001.h5").exists()
 
     def test_load_snapshot_values_match(
-        self, mlp: nn.Module, obs: NeuroInquisitor
+        self, mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
     ) -> None:
         original = {
             name: param.detach().cpu().numpy().copy()
             for name, param in mlp.named_parameters()
         }
         obs.snapshot(epoch=0)
-        loaded = obs.load_snapshot(epoch=0)
+        loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
         for name, arr in original.items():
             np.testing.assert_allclose(loaded[name], arr, rtol=1e-6)
 
-    def test_load_snapshot_shapes(self, mlp: nn.Module, obs: NeuroInquisitor) -> None:
+    def test_load_snapshot_shapes(
+        self, mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
+    ) -> None:
         obs.snapshot(epoch=0)
-        loaded = obs.load_snapshot(epoch=0)
+        loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
         for name, param in mlp.named_parameters():
             assert loaded[name].shape == tuple(param.shape)
 
-    def test_load_snapshot_returns_numpy_arrays(self, obs: NeuroInquisitor) -> None:
+    def test_load_snapshot_returns_numpy_arrays(
+        self, obs: NeuroInquisitor, tmp_path: Path
+    ) -> None:
         obs.snapshot(epoch=0)
-        loaded = obs.load_snapshot(epoch=0)
+        loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
         for arr in loaded.values():
             assert isinstance(arr, np.ndarray)
 
@@ -279,14 +283,14 @@ class TestNeuroInquisitorHDF5:
         assert (tmp_path / "epoch_0000.h5").exists()
 
     def test_compressed_values_match(
-        self, mlp: nn.Module, obs_compressed: NeuroInquisitor
+        self, mlp: nn.Module, obs_compressed: NeuroInquisitor, tmp_path: Path
     ) -> None:
         original = {
             name: param.detach().cpu().numpy().copy()
             for name, param in mlp.named_parameters()
         }
         obs_compressed.snapshot(epoch=0)
-        loaded = obs_compressed.load_snapshot(epoch=0)
+        loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
         for name, arr in original.items():
             np.testing.assert_allclose(loaded[name], arr, rtol=1e-6)
 
@@ -305,7 +309,7 @@ class TestNeuroInquisitorHDF5:
         obs.close()
         assert (tmp_path / "epoch_0000.h5").exists()
 
-    def test_load_all_snapshots_returns_collection(
+    def test_load_returns_collection(
         self, obs: NeuroInquisitor, mlp: nn.Module, tmp_path: Path
     ) -> None:
         for epoch in range(3):
@@ -313,24 +317,24 @@ class TestNeuroInquisitorHDF5:
                 for p in mlp.parameters():
                     p.add_(0.1)
             obs.snapshot(epoch=epoch)
-        col = obs.load_all_snapshots()
+        col = NeuroInquisitor.load(tmp_path)
         assert isinstance(col, SnapshotCollection)
         assert len(col) == 3
 
     def test_collection_by_epoch(
-        self, obs: NeuroInquisitor, mlp: nn.Module
+        self, obs: NeuroInquisitor, mlp: nn.Module, tmp_path: Path
     ) -> None:
         obs.snapshot(epoch=0)
-        col = obs.load_all_snapshots()
+        col = NeuroInquisitor.load(tmp_path)
         params = col.by_epoch(0)
         assert set(params.keys()) == {name for name, _ in mlp.named_parameters()}
 
     def test_collection_by_layer(
-        self, obs: NeuroInquisitor, mlp: nn.Module
+        self, obs: NeuroInquisitor, mlp: nn.Module, tmp_path: Path
     ) -> None:
         for epoch in range(3):
             obs.snapshot(epoch=epoch)
-        col = obs.load_all_snapshots()
+        col = NeuroInquisitor.load(tmp_path)
         result = col.by_layer("0.weight")
         assert set(result.keys()) == {0, 1, 2}
 

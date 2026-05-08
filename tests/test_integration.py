@@ -56,7 +56,7 @@ def test_full_training_loop_with_observer(tmp_path: Path) -> None:
 
     # Verify snapshot files exist on disk.
     for epoch in range(num_epochs):
-        assert (tmp_path / f"epoch_{epoch:04d}.safetensors").exists()
+        assert (tmp_path / f"epoch_{epoch:04d}.h5").exists()
 
     # Verify index records all epochs.
     col = NeuroInquisitor.load(tmp_path)
@@ -87,7 +87,7 @@ def test_weights_change_across_epochs(tmp_path: Path) -> None:
         optimizer.step()
         observer.snapshot(epoch=epoch)
 
-    col = observer.load_all_snapshots()
+    col = NeuroInquisitor.load(tmp_path)
     observer.close()
 
     snap0 = col.by_epoch(0)
@@ -112,7 +112,7 @@ def test_by_layer_parallel_read(tmp_path: Path) -> None:
         saved[epoch] = model.fc1.weight.detach().cpu().numpy().copy()
         observer.snapshot(epoch=epoch)
 
-    col = observer.load_all_snapshots()
+    col = NeuroInquisitor.load(tmp_path)
     observer.close()
 
     by_epoch = col.by_layer("fc1.weight", max_workers=4)
@@ -125,19 +125,17 @@ def test_import_surface() -> None:
     from neuroinquisitor import (
         Backend,
         Format,
+        HDF5Format,
         Index,
         IndexEntry,
         JSONIndex,
         LocalBackend,
         NeuroInquisitor,
-        SafeTensorsFormat,
         SnapshotCollection,
         __version__,
     )
 
     assert isinstance(__version__, str)
     assert hasattr(NeuroInquisitor, "snapshot")
-    assert hasattr(NeuroInquisitor, "load_snapshot")
-    assert hasattr(NeuroInquisitor, "load_all_snapshots")
     assert hasattr(NeuroInquisitor, "load")
     assert hasattr(NeuroInquisitor, "close")
