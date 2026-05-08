@@ -19,6 +19,12 @@ To run the visualisation examples (matplotlib):
 pip install "neuroinquisitor[examples]"
 ```
 
+Some examples need additional packages beyond the `examples` extra:
+
+```bash
+pip install tqdm petname torchvision
+```
+
 For development:
 
 ```bash
@@ -129,14 +135,14 @@ A lazy, filterable view over a run. No tensor data is read until you call `by_ep
 | `col.layers` | `list[str]` | Parameter names in the current view |
 | `len(col)` | `int` | Number of snapshots in the current view |
 | `col.by_epoch(epoch)` | `dict[str, np.ndarray]` | All (filtered) layers for one epoch |
-| `col.by_layer(name, max_workers=8)` | `dict[int, np.ndarray]` | One layer across all (filtered) epochs, read in parallel |
+| `col.by_layer(name, max_workers=8)` | `dict[int, np.ndarray]` | One layer across all snapshots, read in parallel (keys are epoch if present, otherwise step) |
 | `col.select(epochs=…, layers=…)` | `SnapshotCollection` | Narrow the view; composes with existing filters |
 
 `epochs` accepts `int | list[int] | range`; `layers` accepts `str | list[str]`.
 
 ## Examples
 
-The [`examples/`](./examples) directory walks through every part of the API. All examples write their output under `outputs/<example_name>/<timestamp>/` so successive runs don't collide.
+The [`examples/`](./examples) directory walks through every part of the API. Most examples use timestamped output folders, while the larger dataset demos use petname-based run directories.
 
 ### `examples/basic_usage.py`
 Train a tiny MLP for 30 epochs, snapshot weights each epoch, then render a GIF of the FC layer heatmaps over time. Good first read after the quick start.
@@ -167,11 +173,19 @@ Trains a TinyMLP for 40 epochs, then renders five labelled GIFs using different 
 ### `examples/mnist_example.py`
 A real training loop: a small CNN on MNIST for 100 epochs with `tqdm` progress bars, snapshotting after every epoch with `{"loss", "test_loss", "accuracy"}` metadata. After training it loads the full collection with `NeuroInquisitor.load(run_dir)` and produces both an MP4 of the conv/FC weights evolving over time and a train/test loss curve PNG. Run names are generated with `petname` so each run lives in its own directory under `outputs/MNIST_example/<run-name>/`.
 
+### `examples/cifar10_example.py`
+End-to-end CIFAR-10 training with a deeper CNN, per-epoch snapshots, and a multi-panel MP4 showing conv filter evolution, conv-norm timelines, and weight deltas. Saves outputs under `outputs/CIFAR10_example/<run-name>/` with a loss-curve PNG.
+
+### `examples/grokking_example.py`
+A grokking-style modular addition experiment with a 1-layer transformer, tracking 15k optimization steps and rendering a four-panel MP4 (embedding similarity, Fourier power timeline, component norms, and output projection) plus an accuracy-curve PNG under `outputs/grokking_example/<run-name>/`.
+
 Run any example with:
 
 ```bash
 python examples/basic_usage.py
-python examples/mnist_example.py    # needs: pip install tqdm petname torchvision
+python examples/mnist_example.py
+python examples/cifar10_example.py
+python examples/grokking_example.py
 ```
 
 ## On-disk layout
@@ -183,6 +197,8 @@ runs/my_run/
 ├── index.json
 ├── epoch_0000.h5
 ├── epoch_0001.h5
+├── epoch_0002_step_000250.h5
+├── step_000251.h5
 ├── ...
 └── epoch_0099.h5
 ```
