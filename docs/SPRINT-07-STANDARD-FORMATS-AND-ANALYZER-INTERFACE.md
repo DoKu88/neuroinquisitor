@@ -21,8 +21,8 @@ If these are solid, a developer can pipe NI outputs into Captum, TransformerLens
 - [ ] `NI-DELTA-001` Standardize tensor export surface.
   - Add `SnapshotCollection.to_state_dict(epoch) -> Dict[str, Tensor]`: returns a standard PyTorch state dict for a given epoch, loadable with `model.load_state_dict()` directly.
   - Add `SnapshotCollection.to_numpy(epoch, layers=None) -> Dict[str, np.ndarray]`: returns parameter tensors as numpy arrays keyed by layer name. No NI types in the return value.
-  - Confirm `ReplaySession` activation and gradient outputs are plain `Dict[str, Tensor]` keyed by module name (same layout as PyTorch forward hooks). No wrapper objects.
-  - Add `ReplaySession.to_numpy() -> Dict[str, np.ndarray]` for cases where numpy is preferred.
+  - `ReplayResult.activations` and `ReplayResult.gradients` are `TensorMap` objects — a transparent `dict[str, torch.Tensor]` subclass keyed by module name, with the same layout as PyTorch forward hooks.  `isinstance(result.activations, dict)` is `True`; tensor values are plain `torch.Tensor`.
+  - `TensorMap.to_numpy() -> dict[str, np.ndarray]` is available on both `result.activations` and `result.gradients`, enabling symmetric NumPy conversion: `result.activations.to_numpy()` and `result.gradients.to_numpy()`.
   - Acceptance:
     - A developer can call `model.load_state_dict(col.to_state_dict(epoch=5))` with zero NI knowledge beyond that one call.
     - Activation dict from replay matches the exact key/shape layout a manual `register_forward_hook` would produce.

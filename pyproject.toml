@@ -26,6 +26,10 @@ dev = [
 examples = [
     "matplotlib>=3.7",
 ]
+parquet = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -43,4 +47,4 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=neuroinquisitor --cov-fail-under=90"
+addopts = "--cov=neuroinquisitor --cov-fail-under=90 -rs"
