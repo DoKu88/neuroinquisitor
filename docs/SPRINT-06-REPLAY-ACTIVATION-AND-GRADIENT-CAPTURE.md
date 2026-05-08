@@ -7,6 +7,7 @@
   - Create `src/neuroinquisitor/replay.py`.
   - Support checkpoint selector, model factory/loader callback, dataloader/iterable, module selectors, and capture kinds (`activations`, `gradients`, `logits`).
   - Define replay request/response contracts with `pydantic` v2 models.
+  - **Output contract**: activations and gradients are returned as `Dict[str, torch.Tensor]` keyed by module name — identical layout to what a manual `register_forward_hook` / `register_full_backward_hook` would produce. No NI wrapper types in the return value. Logits are returned as a plain `torch.Tensor`.
 - [ ] `NI-BETA-002` Add hook-based activation capture.
   - Support forward hooks for selected modules.
   - Support reduction modes: raw batch outputs, mean over batch, and pooled statistics.

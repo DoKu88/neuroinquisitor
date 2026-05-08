@@ -11,8 +11,14 @@
   - Introduce a simple local worker for long-running analysis jobs.
   - Persist job state in a lightweight store.
 - [ ] `NI-EPSILON-003` Build first frontend panels.
-  - Implement run browser, layer/epoch selector, heatmap panel, spectrum panel, projection panel, and similarity matrix panel.
-  - Add compare mode for two selected epochs.
+  - Implement the following panels, each reading from a specific derived artifact; trigger the corresponding analyzer job automatically if the artifact is missing:
+    - **Run browser**: reads run manifest directly — no analyzer required.
+    - **Layer/epoch selector**: reads manifest snapshot refs — no analyzer required.
+    - **Heatmap panel**: reads raw parameter tensors from HDF5 for the selected layer and epoch.
+    - **Spectrum panel**: reads from the `spectrum_rank` derived Parquet artifact; triggers `spectrum_rank` analyzer if absent.
+    - **Projection panel**: reads from the `projection_embed` derived table artifact (PCA/UMAP coordinates); triggers `projection_embed` analyzer if absent.
+    - **Similarity matrix panel**: reads from the `similarity_compare` derived Parquet artifact; triggers `similarity_compare` analyzer if absent.
+  - Add compare mode for two selected epochs; all panels update to show both epochs side by side.
   - Link projection selection to detail panel updates.
 - [ ] `NI-EPSILON-004` Add provenance and export.
   - Show analyzer name/version, input selectors, dependency versions, and cache key for each result.

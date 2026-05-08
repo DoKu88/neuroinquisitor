@@ -20,9 +20,13 @@
 - [ ] `NI-GAMMA-005` Implement `probe_linear` analyzer.
   - Train a linear probe on replayed activations.
   - Save metrics and coefficients with deterministic train/val split support.
-- [ ] `NI-GAMMA-006` Implement `influence_tracin` analyzer.
-  - Add first practical checkpoint-based approximation for supported classification/loss shapes.
-  - Return top helpful/harmful examples for a query item.
+- [ ] `NI-GAMMA-006` Add TracIn quick-start example using Captum.
+  - Do not implement TracIn from scratch. Captum ships `TracInCP` with a complete, tested implementation.
+  - Write a short runnable example (under 30 lines) showing how to feed NI checkpoints into Captum's `TracInCP`: load checkpoints via `SnapshotCollection.to_state_dict(epoch)`, reconstruct the model at each checkpoint, and pass to `TracInCP`.
+  - Document which NI artifacts `TracInCP` needs (checkpoint state dicts, a loss function, the training dataloader) and where to find them.
+  - Acceptance:
+    - Example runs end-to-end on a toy classification model.
+    - No NI-internal TracIn implementation is added.
 - [ ] Cross-cutting: define analyzer I/O contracts.
   - Standardize analyzer request/result payloads as `pydantic` v2 models.
   - Require versioned, schema-validated derived artifact metadata for each analyzer.
