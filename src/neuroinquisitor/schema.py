@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -87,38 +87,6 @@ class RunManifest(BaseModel):
     derived_artifacts: list[DerivedArtifactRef] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Migration
-# ---------------------------------------------------------------------------
-
-def _migrate_v0_to_v1(raw: dict[str, Any]) -> dict[str, Any]:
-    """Promote a legacy (schema_version absent) manifest to v1 shape."""
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "run_metadata": None,
-        "capture_policy": None,
-        "snapshots": raw.get("snapshots", []),
-        "derived_artifacts": [],
-    }
-
-
-_MIGRATIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "0": _migrate_v0_to_v1,
-}
-
-
 def load_manifest(raw: dict[str, Any]) -> RunManifest:
-    """Load a manifest dict, applying any needed version migrations.
-
-    Raises ``ValueError`` if the schema version is unrecognised and no
-    migration path exists.
-    """
-    version = raw.get("schema_version", "0")
-    if version != SCHEMA_VERSION:
-        if version not in _MIGRATIONS:
-            raise ValueError(
-                f"Unrecognised manifest schema version {version!r}. "
-                f"Expected {SCHEMA_VERSION!r} or a migratable version."
-            )
-        raw = _MIGRATIONS[version](raw)
+    """Deserialise a manifest dict into a :class:`RunManifest`."""
     return RunManifest.model_validate(raw)

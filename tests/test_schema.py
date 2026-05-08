@@ -163,40 +163,16 @@ def test_run_manifest_rejects_unknown_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_manifest — migration (NI-ALPHA-001 acceptance: existing runs readable)
+# load_manifest
 # ---------------------------------------------------------------------------
 
 
-def test_load_manifest_migrates_legacy_format() -> None:
-    legacy = {
-        "snapshots": [
-            {
-                "epoch": 0,
-                "step": None,
-                "file_key": "epoch_0000.h5",
-                "layers": ["fc1.weight"],
-                "metadata": {"loss": 0.9},
-            }
-        ]
-    }
-    manifest = load_manifest(legacy)
-    assert manifest.schema_version == SCHEMA_VERSION
-    assert len(manifest.snapshots) == 1
-    assert manifest.snapshots[0].epoch == 0
-    assert manifest.run_metadata is None
-
-
-def test_load_manifest_current_version_passthrough() -> None:
+def test_load_manifest_round_trips_manifest() -> None:
     m = RunManifest(run_metadata=RunMetadata(git_commit="xyz"))
     raw = json.loads(m.model_dump_json())
     restored = load_manifest(raw)
     assert restored.run_metadata is not None
     assert restored.run_metadata.git_commit == "xyz"
-
-
-def test_load_manifest_unknown_version_raises() -> None:
-    with pytest.raises(ValueError, match="Unrecognised"):
-        load_manifest({"schema_version": "99"})
 
 
 # ---------------------------------------------------------------------------
@@ -416,31 +392,3 @@ def test_capture_policy_round_trips_through_index(tmp_path: Path) -> None:
     assert entry.capture_policy.capture_optimizer is True
 
 
-# ---------------------------------------------------------------------------
-# Backward compatibility: existing runs without schema_version load correctly
-# ---------------------------------------------------------------------------
-
-
-def test_legacy_run_remains_readable(tmp_path: Path) -> None:
-    import numpy as np
-
-    legacy_index = {
-        "snapshots": [
-            {
-                "epoch": 0,
-                "step": None,
-                "file_key": "epoch_0000.h5",
-                "layers": ["weight", "bias"],
-                "metadata": {"loss": 0.5},
-            }
-        ]
-    }
-    model = nn.Linear(2, 1)
-    obs = NeuroInquisitor(model, log_dir=tmp_path)
-    obs.snapshot(epoch=0)
-    obs.close()
-
-    (tmp_path / "index.json").write_text(json.dumps(legacy_index))
-
-    col = NeuroInquisitor.load(tmp_path)
-    assert col.epochs == [0]
