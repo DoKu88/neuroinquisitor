@@ -5,6 +5,18 @@ from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.core import NeuroInquisitor
 from neuroinquisitor.formats import Format, HDF5Format
 from neuroinquisitor.index import Index, IndexEntry, JSONIndex
+from neuroinquisitor.replay import (
+    BalancedNSlice,
+    CheckpointSelector,
+    DatasetSlice,
+    ExplicitIndicesSlice,
+    FirstNSlice,
+    RandomNSlice,
+    ReplayConfig,
+    ReplayMetadata,
+    ReplayResult,
+    ReplaySession,
+)
 from neuroinquisitor.schema import CapturePolicy, RunManifest, RunMetadata
 
 __version__ = "0.1.0"
@@ -21,5 +33,15 @@ __all__ = [
     "CapturePolicy",
     "RunManifest",
     "RunMetadata",
+    "ReplaySession",
+    "ReplayConfig",
+    "ReplayResult",
+    "ReplayMetadata",
+    "CheckpointSelector",
+    "FirstNSlice",
+    "RandomNSlice",
+    "BalancedNSlice",
+    "ExplicitIndicesSlice",
+    "DatasetSlice",
     "__version__",
 ]
