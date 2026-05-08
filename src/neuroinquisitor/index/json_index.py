@@ -10,7 +10,6 @@ from neuroinquisitor.schema import (
     RunManifest,
     RunMetadata,
     SnapshotRef,
-    load_manifest,
 )
 
 from .base import Index, IndexEntry
@@ -47,10 +46,9 @@ class JSONIndex(Index):
 
     The file is rewritten on every :meth:`add` so the catalog is always
     up to date on disk.  The on-disk format is a :class:`~neuroinquisitor.schema.RunManifest`
-    serialised as JSON, with a ``schema_version`` field for future migrations.
-    Future implementors may swap this for a :class:`SQLiteIndex` or a
-    remote SQL catalog without changing anything above the
-    :class:`~neuroinquisitor.index.base.Index` interface.
+    serialised as JSON.  Future implementors may swap this for a
+    :class:`SQLiteIndex` or a remote SQL catalog without changing anything
+    above the :class:`~neuroinquisitor.index.base.Index` interface.
     """
 
     def __init__(self, backend: Backend) -> None:
@@ -102,7 +100,7 @@ class JSONIndex(Index):
         if not backend.exists(_KEY):
             return instance
         raw = json.loads(backend.read_path(_KEY).read_bytes())
-        manifest = load_manifest(raw)
+        manifest = RunManifest.model_validate(raw)
         instance._manifest = manifest.model_copy(update={"snapshots": []})
         instance._entries = [_ref_to_entry(ref) for ref in manifest.snapshots]
         return instance

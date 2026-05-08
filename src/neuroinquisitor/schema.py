@@ -87,6 +87,3 @@ class RunManifest(BaseModel):
     derived_artifacts: list[DerivedArtifactRef] = Field(default_factory=list)
 
 
-def load_manifest(raw: dict[str, Any]) -> RunManifest:
-    """Deserialise a manifest dict into a :class:`RunManifest`."""
-    return RunManifest.model_validate(raw)

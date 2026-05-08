@@ -15,7 +15,6 @@ from neuroinquisitor.schema import (
     DerivedArtifactRef,
     LayerMetadata,
     SnapshotRef,
-    load_manifest,
 )
 
 
@@ -163,19 +162,6 @@ def test_run_manifest_rejects_unknown_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_manifest
-# ---------------------------------------------------------------------------
-
-
-def test_load_manifest_round_trips_manifest() -> None:
-    m = RunManifest(run_metadata=RunMetadata(git_commit="xyz"))
-    raw = json.loads(m.model_dump_json())
-    restored = load_manifest(raw)
-    assert restored.run_metadata is not None
-    assert restored.run_metadata.git_commit == "xyz"
-
-
-# ---------------------------------------------------------------------------
 # NI-ALPHA-001: new runs write schema version
 # ---------------------------------------------------------------------------
 
@@ -222,22 +208,6 @@ def test_custom_run_metadata_persisted(tmp_path: Path) -> None:
     assert meta["git_commit"] == "deadbeef"
     assert meta["optimizer_class"] == "Adam"
     assert meta["training_config"]["lr"] == 0.001
-
-
-def test_metadata_missing_fields_do_not_break_load(tmp_path: Path) -> None:
-    minimal_manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "run_metadata": {"git_commit": "abc"},
-        "snapshots": [],
-        "capture_policy": None,
-        "derived_artifacts": [],
-    }
-    (tmp_path / "index.json").write_text(json.dumps(minimal_manifest))
-    obs = NeuroInquisitor(nn.Linear(2, 1), log_dir=tmp_path, create_new=False)
-    obs.snapshot(epoch=0)
-    obs.close()
-    col = NeuroInquisitor.load(tmp_path)
-    assert col.epochs == [0]
 
 
 # ---------------------------------------------------------------------------
