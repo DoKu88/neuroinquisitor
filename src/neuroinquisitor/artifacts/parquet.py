@@ -46,7 +46,7 @@ def write_derived_table(
     """
     try:
         import pandas as pd  # noqa: F401
-    except ImportError as exc:
+    except ImportError as exc:  # pragma: no cover
         raise ImportError(
             "pandas is required for Parquet output. "
             "Install it with: pip install neuroinquisitor[parquet]"
@@ -54,7 +54,7 @@ def write_derived_table(
 
     try:
         import pyarrow  # noqa: F401
-    except ImportError as exc:
+    except ImportError as exc:  # pragma: no cover
         raise ImportError(
             "pyarrow is required for Parquet output. "
             "Install it with: pip install neuroinquisitor[parquet]"
