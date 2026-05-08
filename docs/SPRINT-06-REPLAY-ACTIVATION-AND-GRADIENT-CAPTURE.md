@@ -15,9 +15,9 @@
   - Support backward hooks or explicit autograd collection.
   - Support per-example and aggregated modes.
 - [ ] `NI-BETA-004` Add dataset slice abstraction.
-  - Support selectors for first N, random N with seed, class-balanced N (when labels exist), and explicit indices.
-  - Implement slice selectors as discriminated `pydantic` models.
-  - Persist slice metadata in derived artifacts.
+  - `ReplaySession` accepts an optional `dataset_slice: Callable[[flat_samples], selected_samples]`. Callers write their own selection logic (e.g. `lambda flat: flat[:N]`). No built-in factory functions.
+  - An optional `slice_metadata: dict` parameter lets callers record provenance for whatever strategy they used.
+  - Persist `slice_metadata` verbatim in `ReplayMetadata.dataset_slice`.
 
 ## Testing
 - Add replay integration tests for a small MLP and CNN example.
@@ -26,7 +26,7 @@
 - Add gradient capture tests for classification examples, including shape correctness checks.
 - Add dataset slice tests for deterministic seeded sampling and metadata persistence.
 - Add artifact-size reporting tests for replay outputs.
-- Add `pydantic` validation tests for replay config and dataset-slice selector contracts.
+- Add `pydantic` validation tests for replay config contracts.
 
 ## Definition of Done
 - `ReplaySession` runs end-to-end for at least one MLP and one CNN path.
