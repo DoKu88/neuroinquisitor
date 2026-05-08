@@ -1,16 +1,15 @@
-"""Tests for HDF5 storage correctness — Sprint 3."""
+"""Tests for storage correctness and SnapshotCollection."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
 
-from neuroinquisitor import NeuroInquisitor
+from neuroinquisitor import NeuroInquisitor, SnapshotCollection
 
 
 @pytest.fixture()
@@ -20,39 +19,32 @@ def mlp() -> nn.Module:
 
 @pytest.fixture()
 def obs(mlp: nn.Module, tmp_path: Path) -> NeuroInquisitor:
-    observer = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5")
+    observer = NeuroInquisitor(mlp, log_dir=tmp_path)
     yield observer
     if not observer._closed:
         observer.close()
 
 
 # ---------------------------------------------------------------------------
-# Group hierarchy
+# File layout
 # ---------------------------------------------------------------------------
 
 
-def test_group_hierarchy_created_correctly(
-    obs: NeuroInquisitor, tmp_path: Path
-) -> None:
+def test_epoch_file_created(obs: NeuroInquisitor, tmp_path: Path) -> None:
+    obs.snapshot(epoch=0)
+    assert (tmp_path / "epoch_0000.h5").exists()
+
+
+def test_multiple_epoch_files_created(obs: NeuroInquisitor, tmp_path: Path) -> None:
     obs.snapshot(epoch=0)
     obs.snapshot(epoch=1)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert "epoch_0000" in f
-        assert "epoch_0001" in f
+    assert (tmp_path / "epoch_0000.h5").exists()
+    assert (tmp_path / "epoch_0001.h5").exists()
 
 
-def test_parameter_datasets_inside_group(
-    mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
-) -> None:
+def test_index_json_exists(obs: NeuroInquisitor, tmp_path: Path) -> None:
     obs.snapshot(epoch=0)
-    obs.close()
-
-    expected = {name for name, _ in mlp.named_parameters()}
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        actual = set(f["epoch_0000"].keys())
-    assert actual == expected
+    assert (tmp_path / "index.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -64,77 +56,48 @@ def test_weights_saved_with_correct_shapes(
     mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
 ) -> None:
     obs.snapshot(epoch=0)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name, param in mlp.named_parameters():
-            assert grp[name].shape == tuple(param.shape), f"Shape mismatch: {name}"
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    for name, param in mlp.named_parameters():
+        assert loaded[name].shape == tuple(param.shape)
 
 
 def test_weights_saved_with_correct_dtype(
     mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
 ) -> None:
     obs.snapshot(epoch=0)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name, param in mlp.named_parameters():
-            expected_dtype = param.detach().cpu().numpy().dtype
-            assert grp[name].dtype == expected_dtype, f"Dtype mismatch: {name}"
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    for name, param in mlp.named_parameters():
+        expected = param.detach().cpu().numpy().dtype
+        assert loaded[name].dtype == expected
 
 
 # ---------------------------------------------------------------------------
-# Compression
+# Load round-trip
 # ---------------------------------------------------------------------------
 
 
-def test_compression_gzip_set_when_compress_true(
-    mlp: nn.Module, tmp_path: Path
+def test_load_values_match_original(
+    mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
 ) -> None:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=True)
-    obs.snapshot(epoch=0)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name in grp:
-            assert grp[name].compression == "gzip", f"Expected gzip for {name}"
-
-
-def test_no_compression_when_compress_false(mlp: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=False)
-    obs.snapshot(epoch=0)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name in grp:
-            assert grp[name].compression is None, f"Expected no compression for {name}"
-
-
-# ---------------------------------------------------------------------------
-# load_snapshot round-trip
-# ---------------------------------------------------------------------------
-
-
-def test_load_snapshot_values_match_original(
-    mlp: nn.Module, obs: NeuroInquisitor
-) -> None:
-    original = {
-        name: param.detach().cpu().numpy() for name, param in mlp.named_parameters()
-    }
+    original = {name: param.detach().cpu().numpy() for name, param in mlp.named_parameters()}
     obs.snapshot(epoch=7)
-    loaded = obs.load_snapshot(epoch=7)
-
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(7)
     for name, arr in original.items():
         np.testing.assert_allclose(loaded[name], arr, rtol=1e-6)
 
 
-def test_load_snapshot_raises_for_missing_epoch(obs: NeuroInquisitor) -> None:
+def test_load_raises_for_missing_epoch(obs: NeuroInquisitor, tmp_path: Path) -> None:
     with pytest.raises(KeyError, match="epoch 99"):
-        obs.load_snapshot(epoch=99)
+        NeuroInquisitor.load(tmp_path).by_epoch(99)
+
+
+def test_load_returns_numpy_arrays(
+    mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    obs.snapshot(epoch=0)
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    for arr in loaded.values():
+        assert isinstance(arr, np.ndarray)
 
 
 # ---------------------------------------------------------------------------
@@ -142,60 +105,36 @@ def test_load_snapshot_raises_for_missing_epoch(obs: NeuroInquisitor) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_multiple_snapshots_coexist(mlp: nn.Module, obs: NeuroInquisitor) -> None:
+def test_multiple_snapshots_coexist(
+    mlp: nn.Module, obs: NeuroInquisitor, tmp_path: Path
+) -> None:
     for epoch in range(5):
-        # mutate weights slightly so values differ
         with torch.no_grad():
-            for param in mlp.parameters():
-                param.add_(0.01)
+            for p in mlp.parameters():
+                p.add_(0.01)
         obs.snapshot(epoch=epoch)
-
+    col = NeuroInquisitor.load(tmp_path)
     for epoch in range(5):
-        loaded = obs.load_snapshot(epoch=epoch)
+        loaded = col.by_epoch(epoch)
         assert set(loaded.keys()) == {name for name, _ in mlp.named_parameters()}
 
 
 # ---------------------------------------------------------------------------
-# Crash-recovery: flush guarantees all prior snapshots survive
+# Append mode
 # ---------------------------------------------------------------------------
 
 
-def test_crash_recovery_all_snapshots_readable(
-    mlp: nn.Module, tmp_path: Path
-) -> None:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5")
-    for epoch in range(3):
-        obs.snapshot(epoch=epoch)
-
-    # Simulate crash: close the HDF5 file object directly, bypassing observer.close()
-    obs._file.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        for epoch in range(3):
-            group_key = f"epoch_{epoch:04d}"
-            assert group_key in f, f"Missing {group_key} after simulated crash"
-            assert len(f[group_key]) > 0
-
-
-# ---------------------------------------------------------------------------
-# Append mode: create_new=False + snapshot
-# ---------------------------------------------------------------------------
-
-
-def test_append_mode_adds_snapshots_to_existing_file(
-    mlp: nn.Module, tmp_path: Path
-) -> None:
-    obs1 = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5", create_new=True)
+def test_append_mode_adds_snapshots(mlp: nn.Module, tmp_path: Path) -> None:
+    obs1 = NeuroInquisitor(mlp, log_dir=tmp_path, create_new=True)
     obs1.snapshot(epoch=0)
     obs1.close()
 
-    obs2 = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5", create_new=False)
+    obs2 = NeuroInquisitor(mlp, log_dir=tmp_path, create_new=False)
     obs2.snapshot(epoch=1)
     obs2.close()
 
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert "epoch_0000" in f
-        assert "epoch_0001" in f
+    col = NeuroInquisitor.load(tmp_path)
+    assert col.epochs == [0, 1]
 
 
 def test_append_mode_preserves_existing_snapshots(
@@ -205,16 +144,15 @@ def test_append_mode_preserves_existing_snapshots(
         name: param.detach().cpu().numpy().copy()
         for name, param in mlp.named_parameters()
     }
-
-    obs1 = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5")
+    obs1 = NeuroInquisitor(mlp, log_dir=tmp_path)
     obs1.snapshot(epoch=0)
     obs1.close()
 
-    obs2 = NeuroInquisitor(mlp, log_dir=tmp_path, filename="weights.h5", create_new=False)
+    obs2 = NeuroInquisitor(mlp, log_dir=tmp_path, create_new=False)
     obs2.snapshot(epoch=1)
-    loaded = obs2.load_snapshot(epoch=0)
     obs2.close()
 
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     for name, arr in original.items():
         np.testing.assert_allclose(loaded[name], arr, rtol=1e-6)
 
@@ -237,13 +175,13 @@ class _NestedModel(nn.Module):
 def test_dotted_parameter_names_round_trip(tmp_path: Path) -> None:
     model = _NestedModel()
     param_names = {name for name, _ in model.named_parameters()}
-    assert any("." in name for name in param_names), "fixture has no dotted names"
+    assert any("." in name for name in param_names)
 
     obs = NeuroInquisitor(model, log_dir=tmp_path)
     obs.snapshot(epoch=0)
-    loaded = obs.load_snapshot(epoch=0)
     obs.close()
 
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     assert set(loaded.keys()) == param_names
     for name, param in model.named_parameters():
         np.testing.assert_allclose(
@@ -252,43 +190,209 @@ def test_dotted_parameter_names_round_trip(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Compression: chunks attribute
+# SnapshotCollection
 # ---------------------------------------------------------------------------
 
 
-def test_chunks_not_none_when_compress_true(mlp: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=True)
-    obs.snapshot(epoch=0)
+@pytest.fixture()
+def multi_obs(mlp: nn.Module, tmp_path: Path) -> NeuroInquisitor:
+    obs = NeuroInquisitor(mlp, log_dir=tmp_path)
+    for epoch in range(4):
+        with torch.no_grad():
+            for p in mlp.parameters():
+                p.add_(0.1)
+        obs.snapshot(epoch=epoch)
     obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name in grp:
-            assert grp[name].chunks is not None, f"Expected chunks for {name}"
+    return NeuroInquisitor(mlp, log_dir=tmp_path, create_new=False)
 
 
-def test_chunks_none_when_compress_false(mlp: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(mlp, log_dir=tmp_path, compress=False)
-    obs.snapshot(epoch=0)
-    obs.close()
-
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        grp = f["epoch_0000"]
-        for name in grp:
-            assert grp[name].chunks is None, f"Expected no chunks for {name}"
+def test_load_returns_collection(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    assert isinstance(col, SnapshotCollection)
+    assert len(col) == 4
 
 
-# ---------------------------------------------------------------------------
-# load_snapshot return type
-# ---------------------------------------------------------------------------
+def test_load_epochs_property(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    assert col.epochs == [0, 1, 2, 3]
 
 
-def test_load_snapshot_returns_numpy_arrays(
-    mlp: nn.Module, obs: NeuroInquisitor
+def test_load_layers_property(
+    mlp: nn.Module, multi_obs: NeuroInquisitor, tmp_path: Path
 ) -> None:
-    obs.snapshot(epoch=0)
-    loaded = obs.load_snapshot(epoch=0)
-    for name, arr in loaded.items():
-        assert isinstance(arr, np.ndarray), f"{name} is {type(arr)}, expected ndarray"
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    assert set(col.layers) == {name for name, _ in mlp.named_parameters()}
 
 
+def test_by_epoch_returns_correct_params(
+    mlp: nn.Module, multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    params = col.by_epoch(0)
+    assert set(params.keys()) == {name for name, _ in mlp.named_parameters()}
+    for arr in params.values():
+        assert isinstance(arr, np.ndarray)
+
+
+def test_by_epoch_raises_for_missing(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    with pytest.raises(KeyError, match="epoch 99"):
+        col.by_epoch(99)
+
+
+def test_by_layer_returns_all_epochs(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    result = col.by_layer("0.weight")
+    assert set(result.keys()) == {0, 1, 2, 3}
+    for arr in result.values():
+        assert isinstance(arr, np.ndarray)
+
+
+def test_by_layer_reads_in_parallel(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    result = col.by_layer("0.weight", max_workers=4)
+    assert set(result.keys()) == {0, 1, 2, 3}
+
+
+def test_by_layer_values_differ_across_epochs(
+    multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    result = col.by_layer("0.weight")
+    assert not np.allclose(result[0], result[3])
+
+
+def test_by_layer_raises_for_missing(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    with pytest.raises(KeyError, match="not found"):
+        col.by_layer("nonexistent.weight")
+
+
+def test_select_by_epoch_range(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=range(1, 3))
+    assert sub.epochs == [1, 2]
+    assert len(sub) == 2
+
+
+def test_select_by_epoch_list(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=[0, 3])
+    assert sub.epochs == [0, 3]
+
+
+def test_select_by_single_epoch(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=2)
+    assert sub.epochs == [2]
+    assert len(sub) == 1
+
+
+def test_select_by_layers(
+    mlp: nn.Module, multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(layers=["0.weight", "0.bias"])
+    assert set(sub.layers) == {"0.weight", "0.bias"}
+
+
+def test_select_by_single_layer(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(layers="0.weight")
+    assert sub.layers == ["0.weight"]
+
+
+def test_select_combined_epochs_and_layers(
+    multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=range(0, 2), layers="0.weight")
+    assert sub.epochs == [0, 1]
+    assert sub.layers == ["0.weight"]
+
+
+def test_select_returns_new_collection(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=range(0, 2))
+    assert sub is not col
+    assert len(col) == 4
+
+
+def test_select_is_composable(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    sub = col.select(epochs=range(0, 3)).select(epochs=range(1, 4))
+    assert sub.epochs == [1, 2]
+
+
+def test_collection_repr(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+    r = repr(col)
+    assert "SnapshotCollection" in r
+    assert "snapshots=4" in r
+
+
+def test_load_is_lazy(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    """NeuroInquisitor.load must not read tensor files — only the index."""
+    import unittest.mock as mock
+
+    col = NeuroInquisitor.load(tmp_path)
+    multi_obs.close()
+
+    with mock.patch.object(col._format, "read", wraps=col._format.read) as mock_read:
+        _ = col.epochs
+        _ = col.layers
+        _ = len(col)
+        mock_read.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# load with epoch/layer filters
+# ---------------------------------------------------------------------------
+
+
+def test_load_with_epoch_filter(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path, epochs=range(1, 3))
+    multi_obs.close()
+    assert col.epochs == [1, 2]
+
+
+def test_load_with_single_epoch(multi_obs: NeuroInquisitor, tmp_path: Path) -> None:
+    col = NeuroInquisitor.load(tmp_path, epochs=2)
+    multi_obs.close()
+    assert col.epochs == [2]
+    assert len(col) == 1
+
+
+def test_load_with_layer_filter(
+    mlp: nn.Module, multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path, layers=["0.weight", "0.bias"])
+    multi_obs.close()
+    assert set(col.layers) == {"0.weight", "0.bias"}
+
+
+def test_load_with_epoch_and_layer_filter(
+    multi_obs: NeuroInquisitor, tmp_path: Path
+) -> None:
+    col = NeuroInquisitor.load(tmp_path, epochs=range(0, 2), layers="0.weight")
+    multi_obs.close()
+    assert col.epochs == [0, 1]
+    assert col.layers == ["0.weight"]

@@ -1,0 +1,75 @@
+"""Store weights: epoch-based snapshotting with metadata and compression.
+
+Run:
+    python examples/store_epochs.py
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+
+from neuroinquisitor import NeuroInquisitor
+
+
+class TinyMLP(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(4, 8)
+        self.fc2 = nn.Linear(8, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc2(self.fc1(x).relu())
+
+
+def main() -> None:
+    torch.manual_seed(0)
+    X = torch.randn(64, 4)
+    y = (X.sum(1, keepdim=True) > 0).float()
+
+    model = TinyMLP()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    loss_fn = nn.BCEWithLogitsLoss()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = Path(__file__).parent.parent / "outputs" / "store_epochs" / timestamp
+    log_dir.mkdir(parents=True, exist_ok=True)
+    print(f"log_dir: {log_dir}\n")
+
+    # --- snapshot every epoch, attaching metadata and using compression ---
+    observer = NeuroInquisitor(
+        model,
+        log_dir=log_dir,
+        compress=True,   # gzip compression inside each .h5 file
+        create_new=True,
+    )
+
+    for epoch in range(5):
+        optimizer.zero_grad()
+        loss = loss_fn(model(X), y)
+        loss.backward()
+        optimizer.step()
+
+        observer.snapshot(
+            epoch=epoch,
+            metadata={"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"]},
+        )
+        print(f"epoch {epoch}  loss={loss.item():.4f}  → snapshot saved")
+
+    observer.close()
+
+    # one .h5 file per epoch + one index.json
+    saved = sorted(log_dir.iterdir())
+    print(f"\nfiles in log_dir: {[f.name for f in saved]}")
+
+    # metadata is stored in the index, not loaded from the .h5 file
+    col = NeuroInquisitor.load(log_dir)
+    for entry in col._index.all():
+        print(f"  epoch {entry.epoch}  metadata={entry.metadata}")
+
+
+if __name__ == "__main__":
+    main()

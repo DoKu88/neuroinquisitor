@@ -1,10 +1,9 @@
-"""Integration test: train a small network on a toy dataset with NeuroInquisitor."""
+"""Integration tests: full training loop with NeuroInquisitor."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 import torch.nn as nn
@@ -24,7 +23,6 @@ class TinyMLP(nn.Module):
 
 
 def make_toy_dataset(n: int = 64) -> tuple[torch.Tensor, torch.Tensor]:
-    """Binary classification: label = 1 if sum(x) > 0 else 0."""
     torch.manual_seed(42)
     X = torch.randn(n, 4)
     y = (X.sum(dim=1, keepdim=True) > 0).float()
@@ -32,18 +30,11 @@ def make_toy_dataset(n: int = 64) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def test_full_training_loop_with_observer(tmp_path: Path) -> None:
-    """Train for several epochs, snapshot each one, then verify storage."""
+    """Train for several epochs, snapshot each one, verify storage and round-trip."""
     model = TinyMLP()
     X, y = make_toy_dataset()
 
-    observer = NeuroInquisitor(
-        model,
-        log_dir=tmp_path,
-        filename="training.h5",
-        compress=True,
-        create_new=True,
-    )
-
+    observer = NeuroInquisitor(model, log_dir=tmp_path, compress=True, create_new=True)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
     loss_fn = nn.BCEWithLogitsLoss()
 
@@ -55,7 +46,6 @@ def test_full_training_loop_with_observer(tmp_path: Path) -> None:
         loss = loss_fn(model(X), y)
         loss.backward()
         optimizer.step()
-
         observer.snapshot(epoch=epoch, metadata={"loss": loss.detach().item()})
         epoch_weights[epoch] = {
             name: param.detach().cpu().numpy().copy()
@@ -64,38 +54,30 @@ def test_full_training_loop_with_observer(tmp_path: Path) -> None:
 
     observer.close()
 
-    # --- verify HDF5 structure ---
-    with h5py.File(tmp_path / "training.h5", "r") as f:
-        for epoch in range(num_epochs):
-            key = f"epoch_{epoch:04d}"
-            assert key in f, f"Missing group {key}"
-            grp = f[key]
-            assert grp.attrs["epoch"] == epoch
-            assert "loss" in grp.attrs
-
-    # --- verify load_snapshot round-trips values ---
-    observer2 = NeuroInquisitor(
-        model,
-        log_dir=tmp_path,
-        filename="training.h5",
-        create_new=False,
-    )
+    # Verify snapshot files exist on disk.
     for epoch in range(num_epochs):
-        loaded = observer2.load_snapshot(epoch=epoch)
+        assert (tmp_path / f"epoch_{epoch:04d}.h5").exists()
+
+    # Verify index records all epochs.
+    col = NeuroInquisitor.load(tmp_path)
+    assert col.epochs == list(range(num_epochs))
+
+    # End-to-end round-trip: values must match what the model had at that epoch.
+    for epoch in range(num_epochs):
+        loaded = col.by_epoch(epoch)
         for name, original_arr in epoch_weights[epoch].items():
             np.testing.assert_allclose(
                 loaded[name], original_arr, rtol=1e-5,
                 err_msg=f"Value mismatch at epoch {epoch}, param {name}",
             )
-    observer2.close()
 
 
 def test_weights_change_across_epochs(tmp_path: Path) -> None:
-    """Weights stored at different epochs must actually differ (training is happening)."""
+    """Weights stored at different epochs must actually differ."""
     model = TinyMLP()
     X, y = make_toy_dataset()
 
-    observer = NeuroInquisitor(model, log_dir=tmp_path, filename="w.h5")
+    observer = NeuroInquisitor(model, log_dir=tmp_path)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     loss_fn = nn.BCEWithLogitsLoss()
 
@@ -105,23 +87,55 @@ def test_weights_change_across_epochs(tmp_path: Path) -> None:
         optimizer.step()
         observer.snapshot(epoch=epoch)
 
-    snap0 = observer.load_snapshot(epoch=0)
-    snap2 = observer.load_snapshot(epoch=2)
+    col = NeuroInquisitor.load(tmp_path)
     observer.close()
 
-    # At least one parameter must have changed
-    any_changed = any(
-        not np.allclose(snap0[name], snap2[name])
-        for name in snap0
-    )
+    snap0 = col.by_epoch(0)
+    snap2 = col.by_epoch(2)
+    any_changed = any(not np.allclose(snap0[n], snap2[n]) for n in snap0)
     assert any_changed, "Weights did not change between epoch 0 and epoch 2"
+
+
+def test_by_layer_parallel_read(tmp_path: Path) -> None:
+    """by_layer should return correct values read in parallel."""
+    model = TinyMLP()
+    X, y = make_toy_dataset()
+    observer = NeuroInquisitor(model, log_dir=tmp_path)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    loss_fn = nn.BCEWithLogitsLoss()
+
+    saved: dict[int, np.ndarray] = {}
+    for epoch in range(4):
+        optimizer.zero_grad()
+        loss_fn(model(X), y).backward()
+        optimizer.step()
+        saved[epoch] = model.fc1.weight.detach().cpu().numpy().copy()
+        observer.snapshot(epoch=epoch)
+
+    col = NeuroInquisitor.load(tmp_path)
+    observer.close()
+
+    by_epoch = col.by_layer("fc1.weight", max_workers=4)
+    for epoch, arr in saved.items():
+        np.testing.assert_allclose(by_epoch[epoch], arr, rtol=1e-5)
 
 
 def test_import_surface() -> None:
     """Public API is importable and complete."""
-    from neuroinquisitor import NeuroInquisitor, __version__
+    from neuroinquisitor import (
+        Backend,
+        Format,
+        HDF5Format,
+        Index,
+        IndexEntry,
+        JSONIndex,
+        LocalBackend,
+        NeuroInquisitor,
+        SnapshotCollection,
+        __version__,
+    )
 
     assert isinstance(__version__, str)
     assert hasattr(NeuroInquisitor, "snapshot")
-    assert hasattr(NeuroInquisitor, "load_snapshot")
+    assert hasattr(NeuroInquisitor, "load")
     assert hasattr(NeuroInquisitor, "close")

@@ -1,13 +1,12 @@
-"""Tests for NeuroInquisitor core class (Sprint 2)."""
+"""Tests for NeuroInquisitor core class."""
 
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
 
-import h5py
 import pytest
-import torch  # noqa: F401
 import torch.nn as nn
 
 from neuroinquisitor import NeuroInquisitor
@@ -18,29 +17,25 @@ def simple_model() -> nn.Module:
     return nn.Linear(4, 2)
 
 
-@pytest.fixture()
-def h5_path(tmp_path: Path) -> Path:
-    return tmp_path / "weights.h5"
-
-
 # ---------------------------------------------------------------------------
-# Instantiation & file creation
+# Instantiation & index creation
 # ---------------------------------------------------------------------------
 
 
-def test_instantiation_creates_hdf5(simple_model: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, filename="weights.h5")
-    assert (tmp_path / "weights.h5").exists()
+def test_instantiation_creates_index(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    assert (tmp_path / "index.json").exists()
     obs.close()
 
 
-def test_hdf5_file_is_valid_after_construction(
+def test_index_is_valid_json_after_construction(
     simple_model: nn.Module, tmp_path: Path
 ) -> None:
-    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, filename="weights.h5")
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
     obs.close()
-    with h5py.File(tmp_path / "weights.h5", "r") as f:
-        assert isinstance(f, h5py.File)
+    data = json.loads((tmp_path / "index.json").read_text())
+    assert "snapshots" in data
 
 
 # ---------------------------------------------------------------------------
@@ -48,11 +43,10 @@ def test_hdf5_file_is_valid_after_construction(
 # ---------------------------------------------------------------------------
 
 
-def test_close_finalizes_file(simple_model: nn.Module, tmp_path: Path) -> None:
+def test_close_sets_closed_flag(simple_model: nn.Module, tmp_path: Path) -> None:
     obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
     obs.close()
     assert obs._closed is True
-    assert not obs._file.id.valid  # h5py file handle is no longer open
 
 
 def test_double_close_is_noop(simple_model: nn.Module, tmp_path: Path) -> None:
@@ -66,52 +60,35 @@ def test_double_close_is_noop(simple_model: nn.Module, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_new_true_raises_when_file_exists(
-    simple_model: nn.Module, h5_path: Path
+def test_create_new_true_raises_when_index_exists(
+    simple_model: nn.Module, tmp_path: Path
 ) -> None:
-    h5_path.touch()
-    with pytest.raises(FileExistsError, match=str(h5_path)):
-        NeuroInquisitor(
-            simple_model,
-            log_dir=h5_path.parent,
-            filename=h5_path.name,
-            create_new=True,
-        )
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, create_new=True)
+    obs.close()
+    with pytest.raises(FileExistsError, match=str(tmp_path)):
+        NeuroInquisitor(simple_model, log_dir=tmp_path, create_new=True)
 
 
-def test_create_new_false_raises_when_file_missing(
-    simple_model: nn.Module, h5_path: Path
+def test_create_new_false_raises_when_index_missing(
+    simple_model: nn.Module, tmp_path: Path
 ) -> None:
-    with pytest.raises(FileNotFoundError, match=str(h5_path)):
-        NeuroInquisitor(
-            simple_model,
-            log_dir=h5_path.parent,
-            filename=h5_path.name,
-            create_new=False,
-        )
+    with pytest.raises(FileNotFoundError, match=str(tmp_path)):
+        NeuroInquisitor(simple_model, log_dir=tmp_path, create_new=False)
 
 
-def test_create_new_false_opens_existing_file(
-    simple_model: nn.Module, h5_path: Path
+def test_create_new_false_opens_existing_run(
+    simple_model: nn.Module, tmp_path: Path
 ) -> None:
-    # Create the file first
-    obs1 = NeuroInquisitor(
-        simple_model,
-        log_dir=h5_path.parent,
-        filename=h5_path.name,
-        create_new=True,
-    )
+    obs1 = NeuroInquisitor(simple_model, log_dir=tmp_path, create_new=True)
+    obs1.snapshot(epoch=0)
     obs1.close()
 
-    # Now open it in append mode
-    obs2 = NeuroInquisitor(
-        simple_model,
-        log_dir=h5_path.parent,
-        filename=h5_path.name,
-        create_new=False,
-    )
-    assert obs2._file.mode == "r+"  # h5py reports append as "r+"
+    obs2 = NeuroInquisitor(simple_model, log_dir=tmp_path, create_new=False)
+    obs2.snapshot(epoch=1)
     obs2.close()
+
+    col = NeuroInquisitor.load(tmp_path)
+    assert col.epochs == [0, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +124,7 @@ def test_del_after_close_no_warning(
 
 def test_repr_contains_model_name(simple_model: nn.Module, tmp_path: Path) -> None:
     obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
-    r = repr(obs)
-    assert "Linear" in r
+    assert "Linear" in repr(obs)
     obs.close()
 
 
@@ -159,9 +135,9 @@ def test_repr_shows_status(simple_model: nn.Module, tmp_path: Path) -> None:
     assert "closed" in repr(obs)
 
 
-def test_repr_shows_filepath(simple_model: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, filename="myweights.h5")
-    assert "myweights.h5" in repr(obs)
+def test_repr_shows_log_dir(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    assert str(tmp_path) in repr(obs)
     obs.close()
 
 
@@ -171,9 +147,11 @@ def test_repr_shows_compress_flag(simple_model: nn.Module, tmp_path: Path) -> No
     obs.close()
 
 
-def test_repr_shows_compress_false(simple_model: nn.Module, tmp_path: Path) -> None:
-    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, compress=False)
-    assert "compress=False" in repr(obs)
+def test_repr_shows_backend_and_format(simple_model: nn.Module, tmp_path: Path) -> None:
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    r = repr(obs)
+    assert "LocalBackend" in r
+    assert "HDF5Format" in r
     obs.close()
 
 
@@ -202,10 +180,52 @@ def test_log_dir_as_string(simple_model: nn.Module, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_close_safe_when_file_never_opened(simple_model: nn.Module) -> None:
-    # Construct a bare instance without going through __init__ so _file is absent,
-    # then verify close() does not raise.
+def test_close_safe_when_partially_constructed(simple_model: nn.Module) -> None:
     obs = object.__new__(NeuroInquisitor)
     obs._closed = False  # type: ignore[attr-defined]
-    obs._filepath = "<none>"  # type: ignore[attr-defined]
-    obs.close()  # must not raise even though _file was never set
+    obs._log_dir = Path("<none>")  # type: ignore[attr-defined]
+    obs.close()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Backend / format resolution
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_backend_raises(simple_model: nn.Module, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Unknown backend"):
+        NeuroInquisitor(simple_model, log_dir=tmp_path, backend="s4")
+
+
+def test_unknown_format_raises(simple_model: nn.Module, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Unknown format"):
+        NeuroInquisitor(simple_model, log_dir=tmp_path, format="parquet")
+
+
+def test_custom_backend_instance_accepted(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    from neuroinquisitor import LocalBackend
+
+    backend = LocalBackend(tmp_path)
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, backend=backend)
+    obs.close()
+
+
+# ---------------------------------------------------------------------------
+# NeuroInquisitor.load() classmethod
+# ---------------------------------------------------------------------------
+
+
+def test_load_classmethod_returns_collection(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    from neuroinquisitor import SnapshotCollection
+
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    col = NeuroInquisitor.load(tmp_path)
+    assert isinstance(col, SnapshotCollection)
+    assert col.epochs == [0]
