@@ -81,10 +81,11 @@ class ReplayMetadata(BaseModel):
 class ReplayResult:
     """Output of :meth:`ReplaySession.run`.
 
-    ``activations`` and ``gradients`` are plain ``dict[str, torch.Tensor]``
-    keyed by module name — identical layout to what
-    ``register_forward_hook`` / ``register_full_backward_hook`` would
-    produce directly.  ``logits`` is a plain ``torch.Tensor``.
+    ``activations`` and ``gradients`` are ``dict[str, torch.Tensor]`` keyed
+    by module name, shaped according to the configured ``activation_reduction``
+    and ``gradient_mode`` respectively.  ``logits`` is the concatenated model
+    output across all batches.  ``metadata`` carries provenance information
+    for the replay.
     """
 
     activations: dict[str, torch.Tensor] = field(default_factory=dict)
@@ -161,10 +162,9 @@ class ReplaySession:
         ``"per_example"`` — full ``(N, ...)`` gradient tensor;
         ``"aggregated"`` — mean over the batch dim → ``(...)``.
     dataset_slice:
-        Optional callable ``(flat_samples) -> selected_samples``.  Use the
-        factory helpers :func:`first_n`, :func:`random_n`,
-        :func:`balanced_n`, or :func:`explicit_indices`.  ``None`` uses all
-        batches.
+        Optional callable ``(flat_samples) -> selected_samples`` that
+        receives a flat list of per-example tuples and returns a subset.
+        ``None`` uses all batches.
     slice_metadata:
         Optional dict stored verbatim in :attr:`ReplayMetadata.dataset_slice`
         for provenance.  Callers are responsible for populating this when
