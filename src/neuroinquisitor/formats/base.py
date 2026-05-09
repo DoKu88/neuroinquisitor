@@ -48,6 +48,19 @@ class Format(ABC):
         implementations should avoid reading the rest from disk.
         """
 
+    def read_buffers(
+        self,
+        path: Path,
+        names: set[str] | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Read buffer tensors stored in *path*.
+
+        Implementations that store buffers separately (e.g. under a
+        ``"buffers/"`` group) should override this.  The default returns an
+        empty dict so formats that do not support buffers remain unchanged.
+        """
+        return {}
+
     @abstractmethod
     def list_layers(self, path: Path) -> list[str]:
         """Return all parameter names stored in *path* without reading tensors."""

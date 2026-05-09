@@ -165,14 +165,36 @@ class SnapshotCollection:
         """Return a standard PyTorch state dict for *epoch*.
 
         The returned dict is loadable directly with ``model.load_state_dict()``.
-        No NI types appear in the return value.
+        Includes both parameters and any buffers (e.g. BatchNorm running stats)
+        that were captured at snapshot time.  No NI types appear in the return
+        value.
 
         Parameters
         ----------
         epoch:
             Epoch index to load.
         """
-        arrays = self.by_epoch(epoch)
+        if self._epoch_filter is not None and epoch not in self._epoch_filter:
+            raise KeyError(
+                f"Epoch {epoch} is excluded by the current selection. "
+                f"Available: {self.epochs}"
+            )
+        entry = self._index.get_by_epoch(epoch)
+        if entry is None:
+            raise KeyError(
+                f"No snapshot for epoch {epoch}. Available: {self.epochs}"
+            )
+        path = self._backend.read_path(entry.file_key)
+        arrays: dict[str, np.ndarray] = self._format.read(path, layers=self._layer_filter)
+
+        if entry.buffers:
+            buf_names = (
+                set(entry.buffers) & self._layer_filter
+                if self._layer_filter is not None
+                else None
+            )
+            arrays = {**arrays, **self._format.read_buffers(path, names=buf_names)}
+
         return {name: torch.from_numpy(arr.copy()) for name, arr in arrays.items()}
 
     def to_numpy(
