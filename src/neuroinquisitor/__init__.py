@@ -15,6 +15,9 @@ from neuroinquisitor.replay import (
 )
 from neuroinquisitor.schema import CapturePolicy, RunManifest, RunMetadata
 
+# analyzers sub-package — import the module so `neuroinquisitor.analyzers` resolves
+from neuroinquisitor import analyzers  # noqa: F401
+
 __version__ = "0.1.0"
 __all__ = [
     "NeuroInquisitor",
@@ -35,5 +38,6 @@ __all__ = [
     "ReplayMetadata",
     "CheckpointSelector",
     "TensorMap",
+    "analyzers",
     "__version__",
 ]
