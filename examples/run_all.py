@@ -1,6 +1,12 @@
 """
-Run every non-utility example script under this directory.  A single failure
-does not stop the run.  Results are written to
+Run all five canonical demo scripts in order:
+  1. multi_arch_showcase.py  — FC + CNN + Transformer, synthetic data, full NI API tour
+  2. grokking_example.py     — step-based snapshots, phase transition
+  3. captum_use_examples/grokking_captum.py
+  4. torchlens_use_examples/torchlens_cifar10.py
+  5. transformerlens_use_examples/cifar10_transformerlens.py
+
+A single failure does not stop the run.  Results are written to
   <repo_root>/outputs/status_run/run_<timestamp>.yaml
 """
 
@@ -17,13 +23,14 @@ REPO_ROOT = EXAMPLES_DIR.parent
 OUTPUT_DIR = REPO_ROOT / "outputs" / "status_run"
 CONFIGS_DIR = EXAMPLES_DIR / "configs"
 
-SKIP_PATTERNS = {"_utils.py", "run_all.py"}
-
-
-def is_example(path: Path) -> bool:
-    return path.suffix == ".py" and not any(
-        path.name.endswith(p) for p in SKIP_PATTERNS
-    )
+# Canonical demos in execution order: showcase first, grokking second, integrations last.
+DEMO_SCRIPTS = [
+    EXAMPLES_DIR / "multi_arch_showcase.py",
+    EXAMPLES_DIR / "grokking_example.py",
+    EXAMPLES_DIR / "captum_use_examples" / "grokking_captum.py",
+    EXAMPLES_DIR / "torchlens_use_examples" / "torchlens_cifar10.py",
+    EXAMPLES_DIR / "transformerlens_use_examples" / "cifar10_transformerlens.py",
+]
 
 
 def _load_config(script: Path) -> dict | None:
@@ -87,10 +94,12 @@ def write_log(log_path: Path, timestamp: str, records: list[dict], total: int) -
 
 
 def main() -> None:
-    scripts = sorted(
-        p for p in EXAMPLES_DIR.rglob("*.py") if is_example(p)
-    )
+    missing = [s for s in DEMO_SCRIPTS if not s.exists()]
+    if missing:
+        for m in missing:
+            print(f"Warning: script not found: {m.relative_to(EXAMPLES_DIR)}")
 
+    scripts = [s for s in DEMO_SCRIPTS if s.exists()]
     if not scripts:
         print("No example scripts found.")
         return

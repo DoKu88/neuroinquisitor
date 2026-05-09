@@ -1,7 +1,14 @@
-"""Grokking (modular addition) + Captum integration with NeuroInquisitor.
+"""Captum integration with NeuroInquisitor — canonical example.
 
-Demonstrates Captum attribution on a transformer trained on the grokking task
-(Power et al. 2022 — learn (a + b) mod p, two-phase memorisation → generalisation).
+What NeuroInquisitor adds to Captum:
+  Without NI, Captum runs attribution once on the final trained model — a single
+  snapshot of how the model explains its predictions at the end of training.
+  With NI's checkpoint infrastructure, attribution becomes a function of training
+  time: you can ask "which input position mattered in step 500 vs step 10 000?"
+  and watch the answer evolve as the model transitions between learning phases.
+  This example uses the grokking task because its two-phase dynamics (memorisation
+  → generalisation) make the attribution trajectory scientifically interesting,
+  but the integration pattern is the same for any checkpoint run.
 
 Integration paths shown:
   Path A  col.to_state_dict(epoch) → model.load_state_dict() → Captum
