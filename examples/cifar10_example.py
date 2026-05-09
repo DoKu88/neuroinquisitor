@@ -6,23 +6,19 @@ Demonstrates every implemented capability:
   • Snapshots      — weight + buffer checkpoints with per-epoch metadata
   • SnapshotCollection — by_epoch, by_layer, select, to_state_dict, to_numpy
   • ReplaySession  — activations, gradients, and logits via forward/backward hooks
-  • Analyzer registry — register and run a custom weight-statistics analyzer
   • Visualization  — weight-evolution video, replay figure, and loss curves
 
 Run:
     python examples/cifar10_example.py
 
 Requires:
-    pip install tqdm petname torchvision matplotlib pandas
+    pip install tqdm petname torchvision matplotlib
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
 import numpy as np
-import pandas as pd
 import petname
 import torch
 import torch.nn as nn
@@ -32,18 +28,10 @@ from torchvision import datasets, transforms
 from tqdm import tqdm
 
 from neuroinquisitor import (
-    AnalyzerRequest,
-    AnalyzerResult,
-    AnalyzerSpec,
     CapturePolicy,
     NeuroInquisitor,
-    PROVENANCE_COLUMNS,
     ReplaySession,
     RunMetadata,
-    get_analyzer,
-    list_analyzers,
-    register,
-    write_derived_table,
 )
 from cifar10_example_utils import (
     make_video,
@@ -83,61 +71,6 @@ class CIFAR10Net(nn.Module):
         x = self.dropout(x.flatten(1))
         x = self.relu(self.fc1(x))
         return self.fc2(x)
-
-
-# ---------------------------------------------------------------------------
-# Custom analyzer — weight statistics
-# ---------------------------------------------------------------------------
-
-
-class WeightStatsRequest(AnalyzerRequest):
-    """Request for the weight-statistics analyzer."""
-    # Inherits: run (str), layers (list[str]), epochs (list[int])
-
-
-class WeightStatsResult(AnalyzerResult):
-    """Per-layer mean, std, and near-zero sparsity across epochs."""
-    rows: list[dict[str, Any]] = []
-
-
-def _weight_stats_fn(request: WeightStatsRequest) -> WeightStatsResult:
-    col = NeuroInquisitor.load(
-        request.run,
-        epochs=request.epochs or None,
-        layers=request.layers or None,
-    )
-    rows: list[dict[str, Any]] = []
-    run_id = Path(request.run).name
-    for epoch in col.epochs:
-        snap = col.by_epoch(epoch)
-        for layer, w in snap.items():
-            rows.append({
-                "run_id":           run_id,
-                "epoch":            epoch,
-                "layer":            layer,
-                "analyzer_name":    "weight_stats",
-                "analyzer_version": "1.0.0",
-                "mean":             float(w.mean()),
-                "std":              float(w.std()),
-                "sparsity":         float((np.abs(w) < 1e-6).mean()),
-                "p95_abs":          float(np.percentile(np.abs(w), 95)),
-            })
-    return WeightStatsResult(
-        analyzer_name="weight_stats",
-        analyzer_version="1.0.0",
-        run=request.run,
-        rows=rows,
-    )
-
-
-WEIGHT_STATS_SPEC = AnalyzerSpec(
-    name="weight_stats",
-    version="1.0.0",
-    required_inputs=["weights"],
-    output_format="table",
-    description="Per-layer mean, std, sparsity, and p95 absolute value across epochs.",
-    fn=_weight_stats_fn,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -335,23 +268,6 @@ def main() -> None:
         act_shape  = final_replay.activations[name].shape
         grad_shape = final_replay.gradients[name].shape
         print(f"  {name:6s} — activations {tuple(act_shape)}  gradients {tuple(grad_shape)}")
-
-    # ── Analyzer registry ─────────────────────────────────────────────────────
-
-    print("\n── Analyzer registry ──")
-    register(WEIGHT_STATS_SPEC)
-
-    for spec in list_analyzers():
-        print(f"  {spec.name} v{spec.version} — {spec.description}")
-
-    spec = get_analyzer("weight_stats")
-    stats_result = spec.fn(WeightStatsRequest(run=str(run_dir)))
-    print(f"  Analyzer produced {len(stats_result.rows)} rows")
-
-    stats_df = pd.DataFrame(stats_result.rows)
-    assert PROVENANCE_COLUMNS.issubset(stats_df.columns), "Missing provenance columns"
-    stats_path = write_derived_table(stats_df, run_dir / "weight_stats.parquet")
-    print(f"  Derived table written → {stats_path.name}")
 
     # ── Visualizations ────────────────────────────────────────────────────────
 
