@@ -19,7 +19,8 @@ symmetric — matching the algebraic symmetry of addition.
 
 Outputs (in outputs/Grokking_Captum/<run-name>/):
   token_attribution_evolution.png  — mean |LIG| per position across snapshots
-  attribution_heatmap.png          — full (snapshots × position) attribution map
+  attribution_evolution.mp4/.gif   — animated line chart: a/b/= attribution growing over training
+  ab_symmetry.mp4/.gif             — animated scatter: a vs b attribution trail
   conductance_at_checkpoints.png   — LayerConductance per position at checkpoints
   accuracy_curves.png              — train/test accuracy over training
   replay_activations.txt           — activation shapes from ReplaySession
@@ -31,8 +32,8 @@ Requires:
     pip install tqdm petname matplotlib captum
 
 Note: full grokking generalisation typically requires ~15 000+ steps with
-weight_decay=1.0. The default config uses 5 000 steps for a faster demo;
-increase num_steps in the config to observe the complete phase transition.
+weight_decay=1.0. The default config uses those values; reduce num_steps in
+the config for a faster demo run.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ import torch
 import yaml
 import torch.nn as nn
 import torch.optim as optim
+from captum.attr import LayerConductance, LayerIntegratedGradients
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -56,22 +58,18 @@ from neuroinquisitor import (
     SnapshotCollection,
 )
 
-from grokking_captum_utils import (
-    compute_conductance_at_checkpoints,
-    compute_lig_per_snapshot,
-    generate_grokking_captum_visualizations,
-)
+from grokking_captum_utils import generate_grokking_captum_visualizations
 
 _cfg = yaml.safe_load(
     (Path(__file__).parent.parent / "configs" / "captum_use_examples_grokking_captum.yaml").read_text()
 )
 
-P             = _cfg["p"]
-D_MODEL       = _cfg["d_model"]
-N_HEADS       = _cfg["n_heads"]
-FFN_DIM       = _cfg["ffn_dim"]
-EQ_TOKEN      = P
-NUM_STEPS     = _cfg["num_steps"]
+P              = _cfg["p"]
+D_MODEL        = _cfg["d_model"]
+N_HEADS        = _cfg["n_heads"]
+FFN_DIM        = _cfg["ffn_dim"]
+EQ_TOKEN       = P
+NUM_STEPS      = _cfg["num_steps"]
 SNAPSHOT_EVERY = _cfg["snapshot_every"]
 
 
@@ -113,6 +111,26 @@ class GrokkingTransformer(nn.Module):
 
 def model_factory() -> GrokkingTransformer:
     return GrokkingTransformer(P, D_MODEL, N_HEADS, FFN_DIM)
+
+
+class _EmbeddingForwardModel(nn.Module):
+    """Wrapper that accepts float embeddings, bypassing nn.Embedding lookup.
+
+    LayerConductance interpolates its input tensor between baseline and actual,
+    producing float tensors. nn.Embedding rejects floats, so we pre-compute
+    embeddings outside Captum and pass this float-compatible wrapper instead.
+    """
+
+    def __init__(self, model: GrokkingTransformer) -> None:
+        super().__init__()
+        self._m = model
+
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        # embeddings: (N, seq_len, d_model)
+        pos = torch.arange(embeddings.size(1), device=embeddings.device)
+        h = embeddings + self._m.pos_emb(pos)
+        h = self._m.transformer(h)
+        return self._m.output_proj(h[:, -1])
 
 
 # ---------------------------------------------------------------------------
@@ -204,16 +222,16 @@ def train(
 
 
 # ---------------------------------------------------------------------------
-# Analysis
+# Analysis — Captum calls live here so the integration pattern is visible
 # ---------------------------------------------------------------------------
 
 
 def analyze(
     snapshots: SnapshotCollection,
     run_dir: Path,
-    attr_inputs: torch.Tensor,
-    attr_targets: torch.Tensor,
-    baseline: torch.Tensor,
+    attr_inputs: torch.Tensor,   # (N, 3) LongTensor, CPU
+    attr_targets: torch.Tensor,  # (N,) LongTensor, CPU
+    baseline: torch.Tensor,      # (N, 3) LongTensor, CPU — zero operands, EQ_TOKEN preserved
     test_loader: DataLoader,
     n_snapshots: int,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
@@ -222,27 +240,87 @@ def analyze(
     print(f"  Captured layers  : {len(snapshots.layers)} tensors")
     print(f"  Total snapshots  : {len(snapshots)}")
 
+    # ------------------------------------------------------------------
+    # Path A — col.to_state_dict(epoch) → model.load_state_dict() → Captum
+    #
+    # LayerIntegratedGradients on token_emb: attributes each input position's
+    # (a, b, =) importance to the prediction.  We loop over every NI snapshot
+    # so we can watch the attribution evolve across training.
+    # ------------------------------------------------------------------
     print("\n── Path A  col.to_state_dict() → LayerIntegratedGradients ──")
     print("  Tracking token attribution across all snapshots …")
-    lig_evolution = compute_lig_per_snapshot(
-        snapshots, model_factory, attr_inputs, attr_targets, baseline,
-        n_steps=_cfg["ig_n_steps"],
-    )
-    print(f"  Attribution shape  : {lig_evolution.shape}  (snapshots × token_positions)")
-    a, b, eq = lig_evolution[-1]
+
+    lig_evolution: list[np.ndarray] = []
+    for epoch in tqdm(snapshots.epochs, desc="  LIG per snapshot", unit="snap"):
+        model = model_factory()
+        model.load_state_dict(snapshots.to_state_dict(epoch), strict=False)
+        model.eval()
+
+        lig   = LayerIntegratedGradients(model, model.token_emb)
+        attrs = lig.attribute(
+            attr_inputs,
+            baselines=baseline,
+            target=attr_targets,
+            n_steps=_cfg["ig_n_steps"],
+            return_convergence_delta=False,
+        )
+        # attrs: (N, 3, d_model) — attribution in embedding space
+        # L2-norm over d_model → (N, 3), mean over N → (3,)
+        lig_evolution.append(attrs.norm(dim=-1).mean(dim=0).detach().cpu().numpy())
+
+    lig_arr = np.array(lig_evolution)  # (n_snapshots, 3)
+    print(f"  Attribution shape  : {lig_arr.shape}  (snapshots × token_positions)")
+    a, b, eq = lig_arr[-1]
     print(f"  Final snapshot  →  a={a:.4f}  b={b:.4f}  ={eq:.4f}")
     sym = abs(a - b) / (max(a, b) + 1e-8)
-    print(f"  |a−b| / max(a,b) = {sym:.3f}  {'(symmetric ✓)' if sym < 0.1 else '(asymmetric — more training may show grokking)'}")
+    print(f"  |a−b| / max(a,b) = {sym:.3f}  "
+          f"{'(symmetric ✓)' if sym < 0.1 else '(asymmetric — more training may show grokking)'}")
 
+    # ------------------------------------------------------------------
+    # Path A (continued) — LayerConductance on transformer encoder
+    #
+    # Measures how much the transformer block itself contributes to the
+    # prediction at each token position (vs. the embeddings alone).
+    # Because output_proj reads h[:, -1], gradient flows only through
+    # position 2 (=), so operand positions are expected near-zero.
+    #
+    # nn.Embedding rejects float inputs, so we use _EmbeddingForwardModel
+    # to pre-convert token IDs → float embeddings before Captum touches them.
+    # ------------------------------------------------------------------
     print("\n── Path A  col.to_state_dict() → LayerConductance ──")
-    n_ckpts = _cfg["n_conductance_checkpoints"]
+    n_ckpts     = _cfg["n_conductance_checkpoints"]
     ckpt_indices = [int(round(i * (n_snapshots - 1) / (n_ckpts - 1))) for i in range(n_ckpts)]
-    conductance = compute_conductance_at_checkpoints(
-        snapshots, model_factory, attr_inputs, attr_targets, baseline,
-        ckpt_indices, n_steps=_cfg["ig_n_steps"],
-    )
+    conductance_list: list[np.ndarray] = []
+
+    for idx in tqdm(ckpt_indices, desc="  Conductance at checkpoints", unit="ckpt"):
+        model = model_factory()
+        model.load_state_dict(snapshots.to_state_dict(snapshots.epochs[idx]), strict=False)
+        model.eval()
+
+        wrapper         = _EmbeddingForwardModel(model)
+        actual_embeds   = model.token_emb(attr_inputs).detach()   # (N, 3, d_model)
+        baseline_embeds = model.token_emb(baseline).detach()      # (N, 3, d_model)
+
+        lc   = LayerConductance(wrapper, wrapper._m.transformer)
+        cond = lc.attribute(
+            actual_embeds,
+            baselines=baseline_embeds,
+            target=attr_targets,
+            n_steps=_cfg["ig_n_steps"],
+        )
+        # cond: (N, 3, d_model)
+        conductance_list.append(cond.norm(dim=-1).mean(dim=0).detach().cpu().numpy())
+
+    conductance = np.array(conductance_list)  # (n_checkpoints, 3)
     print(f"  Conductance shape : {conductance.shape}  (checkpoints × token_positions)")
 
+    # ------------------------------------------------------------------
+    # Path B — ReplaySession → plain tensors → Captum
+    #
+    # ReplaySession captures activations during a forward pass over the
+    # final checkpoint.  The result tensors are plain torch.Tensor —
+    # no NI types involved — so they drop straight into any Captum method.
+    # ------------------------------------------------------------------
     print("\n── Path B  ReplaySession → plain tensors → Captum ──")
     final_epoch = n_snapshots - 1
     result = ReplaySession(
@@ -272,12 +350,11 @@ def analyze(
         ),
         "",
         "All activation values are plain torch.Tensor — Captum accepts them directly.",
-        "Example: feed transformer output activations into LayerConductance as additional evidence.",
     ]
     replay_path.write_text("\n".join(lines))
     print(f"  Replay log saved : {replay_path.name}")
 
-    return lig_evolution, conductance, ckpt_indices
+    return lig_arr, conductance, ckpt_indices
 
 
 # ---------------------------------------------------------------------------
@@ -313,13 +390,13 @@ def main() -> None:
     test_x_dev,  test_y_dev  = test_x.to(train_device),  test_y.to(train_device)
 
     # Attribution samples stay on CPU (Captum requirement for gradient-based methods).
-    # Baseline: [0, 0, EQ_TOKEN] — null operands, structural token preserved.
+    # Baseline: [0, 0, EQ_TOKEN] — null operands, structural = token preserved.
     attr_n       = _cfg["attr_samples"]
-    attr_inputs  = test_x[:attr_n]   # (N, 3) LongTensor, CPU
-    attr_targets = test_y[:attr_n]   # (N,) LongTensor, CPU
+    attr_inputs  = test_x[:attr_n]
+    attr_targets = test_y[:attr_n]
     baseline     = attr_inputs.clone()
     baseline[:, 0] = 0
-    baseline[:, 1] = 0  # zero out operands; keep EQ_TOKEN at position 2
+    baseline[:, 1] = 0
 
     model     = model_factory().to(train_device)
     optimizer = optim.AdamW(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])

@@ -21,10 +21,8 @@ n_heads: 4
 ffn_dim: 512
 
 # training
-# Note: full grokking generalisation typically requires ~15 000+ steps.
-# Increase num_steps to observe the complete memorisation → generalisation transition.
-num_steps: 5000
-snapshot_every: 50
+num_steps: 15000
+snapshot_every: 150
 lr: 0.001
 weight_decay: 1.0
 

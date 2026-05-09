@@ -1,127 +1,17 @@
-"""Captum attribution utilities for the Grokking Captum example."""
+"""Visualization utilities for the Grokking Captum example."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
 
+import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
-import torch.nn as nn
-from captum.attr import LayerConductance, LayerIntegratedGradients
-from tqdm import tqdm
 
-from neuroinquisitor.collection import SnapshotCollection
 
-TOKEN_LABELS = ["a  (pos 0)", "b  (pos 1)", "=  (pos 2)"]
+TOKEN_LABELS = ["operand a\n(first input)", "operand b\n(second input)", "equals =\n(output position)"]
+TOKEN_LABELS_SHORT = ["a", "b", "="]
 TOKEN_COLORS = ["tab:blue", "tab:orange", "tab:green"]
-
-
-# ---------------------------------------------------------------------------
-# Captum compute helpers
-# ---------------------------------------------------------------------------
-
-
-def compute_lig_per_snapshot(
-    snapshots: SnapshotCollection,
-    model_factory: Callable[[], nn.Module],
-    attr_inputs: torch.Tensor,   # (N, 3) LongTensor, CPU
-    attr_targets: torch.Tensor,  # (N,) LongTensor, CPU
-    baseline: torch.Tensor,      # (N, 3) LongTensor, CPU
-    n_steps: int = 30,
-) -> np.ndarray:
-    """LayerIntegratedGradients on token_emb across all snapshots.
-
-    Integration point: col.to_state_dict(epoch) → model.load_state_dict()
-    No NI types cross the Captum boundary — just a plain nn.Module and tensors.
-
-    Returns (n_snapshots, 3): mean L2-norm of embedding attribution per token position.
-    """
-    results = []
-    for epoch in tqdm(snapshots.epochs, desc="  LIG per snapshot", unit="snap"):
-        model = model_factory()
-        model.load_state_dict(snapshots.to_state_dict(epoch), strict=False)
-        model.eval()
-
-        lig = LayerIntegratedGradients(model, model.token_emb)
-        attrs = lig.attribute(
-            attr_inputs,
-            baselines=baseline,
-            target=attr_targets,
-            n_steps=n_steps,
-            return_convergence_delta=False,
-        )
-        # attrs: (N, 3, d_model) — attribution in embedding space
-        # L2-norm over d_model → (N, 3), then mean over N → (3,)
-        token_attr = attrs.norm(dim=-1).mean(dim=0).detach().cpu().numpy()
-        results.append(token_attr)
-
-    return np.array(results)  # (n_snapshots, 3)
-
-
-class _EmbeddingForwardModel(nn.Module):
-    """Wrapper that takes float embeddings as input, bypassing nn.Embedding lookup.
-
-    LayerConductance interpolates its input tensor between baseline and actual,
-    producing floats. nn.Embedding rejects floats, so we pre-compute embeddings
-    and feed this wrapper instead.
-    """
-
-    def __init__(self, model: nn.Module) -> None:
-        super().__init__()
-        self._m = model
-
-    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
-        # embeddings: (N, seq_len, d_model) — already in embedding space
-        pos = torch.arange(embeddings.size(1), device=embeddings.device)
-        h = embeddings + self._m.pos_emb(pos)
-        h = self._m.transformer(h)
-        return self._m.output_proj(h[:, -1])
-
-
-def compute_conductance_at_checkpoints(
-    snapshots: SnapshotCollection,
-    model_factory: Callable[[], nn.Module],
-    attr_inputs: torch.Tensor,
-    attr_targets: torch.Tensor,
-    baseline: torch.Tensor,
-    checkpoint_indices: list[int],
-    n_steps: int = 30,
-) -> np.ndarray:
-    """LayerConductance on the transformer encoder at selected snapshot indices.
-
-    Measures how much the full transformer encoder block contributes to the
-    prediction at each token position, vs. the learned embeddings alone.
-
-    Uses _EmbeddingForwardModel so Captum interpolates in continuous embedding
-    space rather than passing floats to nn.Embedding.
-
-    Returns (len(checkpoint_indices), 3).
-    """
-    epochs = snapshots.epochs
-    results = []
-    for idx in tqdm(checkpoint_indices, desc="  Conductance at checkpoints", unit="ckpt"):
-        model = model_factory()
-        model.load_state_dict(snapshots.to_state_dict(epochs[idx]), strict=False)
-        model.eval()
-
-        wrapper = _EmbeddingForwardModel(model)
-        actual_embeds   = model.token_emb(attr_inputs).detach()   # (N, 3, d_model)
-        baseline_embeds = model.token_emb(baseline).detach()      # (N, 3, d_model)
-
-        lc = LayerConductance(wrapper, wrapper._m.transformer)
-        cond = lc.attribute(
-            actual_embeds,
-            baselines=baseline_embeds,
-            target=attr_targets,
-            n_steps=n_steps,
-        )
-        # cond: (N, 3, d_model) — conductance at transformer output
-        token_cond = cond.norm(dim=-1).mean(dim=0).detach().cpu().numpy()  # (3,)
-        results.append(token_cond)
-
-    return np.array(results)  # (n_checkpoints, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +27,7 @@ def generate_grokking_captum_visualizations(
     test_accs: list[float],
     snapshot_every: int,
     run_dir: Path,
+    fps: int = 10,
 ) -> None:
     print("\n── Visualizations ──")
 
@@ -144,21 +35,170 @@ def generate_grokking_captum_visualizations(
     _save_attribution_evolution(lig_evolution, test_accs, snapshot_every, p1)
     print(f"  Saved: {p1.name}")
 
-    p2 = run_dir / "attribution_heatmap.png"
-    _save_attribution_heatmap(lig_evolution, p2)
+    p2 = save_attribution_evolution_video(lig_evolution, snapshot_every, run_dir / "attribution_evolution", fps=fps)
     print(f"  Saved: {p2.name}")
 
     p3 = run_dir / "conductance_at_checkpoints.png"
-    _save_conductance_chart(conductance, checkpoint_indices, p3)
+    _save_conductance_chart(conductance, checkpoint_indices, snapshot_every, p3)
     print(f"  Saved: {p3.name}")
 
     p4 = run_dir / "accuracy_curves.png"
     _save_accuracy_curves(train_accs, test_accs, snapshot_every, p4)
     print(f"  Saved: {p4.name}")
 
+    p5 = save_symmetry_scatter_video(lig_evolution, snapshot_every, run_dir / "ab_symmetry", fps=fps)
+    print(f"  Saved: {p5.name}")
+
 
 # ---------------------------------------------------------------------------
-# Plot helpers
+# Video helpers
+# ---------------------------------------------------------------------------
+
+
+def save_attribution_evolution_video(
+    lig_evolution: np.ndarray,
+    snapshot_every: int,
+    out_stem: Path,
+    fps: int = 10,
+) -> Path:
+    """Animated line chart: token attributions grow over training, frame by frame.
+
+    Left panel: lines for operand a, operand b, and equals = extend rightward
+    with each frame.  Both panels share the same y-axis scale so the bar chart
+    directly corresponds to the current point on the lines.
+
+    The key signal: do a and b converge to the same value?  If so, the model
+    has learned the symmetric addition algorithm (grokking generalisation).
+    """
+    n_snaps = lig_evolution.shape[0]
+    steps   = np.array([(i + 1) * snapshot_every for i in range(n_snaps)])
+    y_max   = lig_evolution.max() * 1.1
+
+    fig, (ax_line, ax_bar) = plt.subplots(
+        1, 2, figsize=(11, 5), constrained_layout=True,
+        gridspec_kw={"width_ratios": [3, 1]},
+    )
+    fig.suptitle("Which input token drives predictions? (LayerIntegratedGradients)", fontsize=11)
+
+    # ── left: growing line chart ──
+    line_a,  = ax_line.plot([], [], color="tab:blue",   linewidth=2,   label="operand a")
+    line_b,  = ax_line.plot([], [], color="tab:orange", linewidth=2,   label="operand b")
+    line_eq, = ax_line.plot([], [], color="tab:green",  linewidth=1.2, linestyle="--",
+                             alpha=0.7, label="equals = (output position)")
+    vline = ax_line.axvline(x=steps[0], color="gray", linestyle=":", linewidth=1, alpha=0.6)
+
+    ax_line.set_xlim(steps[0], steps[-1])
+    ax_line.set_ylim(0, y_max)
+    ax_line.set_xlabel("Training step")
+    ax_line.set_ylabel("Mean token attribution (L2 norm)")
+    ax_line.legend(loc="upper right", fontsize=9)
+    ax_line.grid(True, alpha=0.3)
+    ax_line.set_title(
+        "a and b converging → model learned the algorithm\n"
+        "a and b diverging → memorisation only",
+        fontsize=9,
+    )
+
+    # ── right: bar chart (same y scale) ──
+    bars = ax_bar.bar([0, 1, 2], [0, 0, 0], color=TOKEN_COLORS, alpha=0.85)
+    ax_bar.set_xticks([0, 1, 2])
+    ax_bar.set_xticklabels(TOKEN_LABELS_SHORT, fontsize=9)
+    ax_bar.set_ylim(0, y_max)
+    ax_bar.set_ylabel("Attribution (L2 norm)")
+    ax_bar.grid(True, axis="y", alpha=0.3)
+
+    def update(frame: int) -> list:
+        line_a.set_data(steps[: frame + 1], lig_evolution[: frame + 1, 0])
+        line_b.set_data(steps[: frame + 1], lig_evolution[: frame + 1, 1])
+        line_eq.set_data(steps[: frame + 1], lig_evolution[: frame + 1, 2])
+        vline.set_xdata([steps[frame], steps[frame]])
+        for bar, val in zip(bars, lig_evolution[frame]):
+            bar.set_height(val)
+        ax_bar.set_title(f"step {steps[frame]:,}", fontsize=10)
+        return [line_a, line_b, line_eq, vline, *bars]
+
+    ani = animation.FuncAnimation(fig, update, frames=n_snaps, interval=1000 // fps, blit=False)
+    out_path = _save_animation(ani, out_stem, fps)
+    plt.close(fig)
+    return out_path
+
+
+def save_symmetry_scatter_video(
+    lig_evolution: np.ndarray,
+    snapshot_every: int,
+    out_stem: Path,
+    fps: int = 10,
+) -> Path:
+    """Animated scatter: a-attribution vs b-attribution, dots appear one per frame.
+
+    The trail reveals the model's trajectory through attribution space.
+    Points near the diagonal mean the model treats both operands equally —
+    the hallmark of the grokking generalisation algorithm.
+    """
+    a_vals = lig_evolution[:, 0]
+    b_vals = lig_evolution[:, 1]
+    n_snaps = len(a_vals)
+    steps   = np.array([(i + 1) * snapshot_every for i in range(n_snaps)])
+    lim     = max(a_vals.max(), b_vals.max()) * 1.08
+
+    fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
+    ax.plot([0, lim], [0, lim], "--", color="gray", alpha=0.5, linewidth=1.2,
+            label="a = b  (perfect symmetry)")
+
+    # Ghost of full trajectory
+    ax.scatter(a_vals, b_vals, c="lightgray", s=15, alpha=0.25, zorder=2)
+
+    # Growing trail (colored by training step)
+    scat = ax.scatter([], [], c=[], cmap="viridis", s=35, alpha=0.9, zorder=3,
+                      vmin=steps[0], vmax=steps[-1])
+    current_dot, = ax.plot([], [], "ro", ms=9, zorder=5, label="current step")
+
+    fig.colorbar(scat, ax=ax, label="Training step",
+                 format=plt.FuncFormatter(lambda v, _: f"{int(v):,}"))
+
+    step_label = ax.text(0.05, 0.95, "", transform=ax.transAxes,
+                         va="top", fontsize=10, fontweight="bold")
+
+    ax.set_xlabel("LIG attribution — operand a (first input)", fontsize=10)
+    ax.set_ylabel("LIG attribution — operand b (second input)", fontsize=10)
+    ax.set_title(
+        "a vs b attribution: trajectory through training\n"
+        "Trail converging to diagonal = model learning symmetric algorithm",
+        fontsize=10,
+    )
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_aspect("equal")
+    ax.legend(fontsize=9, loc="upper left")
+    ax.grid(True, alpha=0.3)
+
+    def update(frame: int) -> list:
+        xy = np.column_stack([a_vals[: frame + 1], b_vals[: frame + 1]])
+        scat.set_offsets(xy)
+        scat.set_array(steps[: frame + 1])
+        current_dot.set_data([a_vals[frame]], [b_vals[frame]])
+        step_label.set_text(f"step {steps[frame]:,}")
+        return [scat, current_dot, step_label]
+
+    ani = animation.FuncAnimation(fig, update, frames=n_snaps, interval=1000 // fps, blit=False)
+    out_path = _save_animation(ani, out_stem, fps)
+    plt.close(fig)
+    return out_path
+
+
+def _save_animation(ani: animation.FuncAnimation, out_stem: Path, fps: int) -> Path:
+    mp4 = out_stem.with_suffix(".mp4")
+    try:
+        ani.save(str(mp4), writer=animation.FFMpegWriter(fps=fps))
+        return mp4
+    except Exception:
+        gif = out_stem.with_suffix(".gif")
+        ani.save(str(gif), writer=animation.PillowWriter(fps=fps))
+        return gif
+
+
+# ---------------------------------------------------------------------------
+# Static plot helpers
 # ---------------------------------------------------------------------------
 
 
@@ -171,13 +211,16 @@ def _save_attribution_evolution(
     steps = [(i + 1) * snapshot_every for i in range(lig_evolution.shape[0])]
 
     fig, ax1 = plt.subplots(figsize=(10, 5), constrained_layout=True)
-    for i, (label, color) in enumerate(zip(TOKEN_LABELS, TOKEN_COLORS)):
+    labels = ["operand a  (pos 0)", "operand b  (pos 1)", "equals =  (pos 2)"]
+    for i, (label, color) in enumerate(zip(labels, TOKEN_COLORS)):
         ax1.plot(steps, lig_evolution[:, i], label=label, color=color, linewidth=1.5)
 
     ax1.set_xlabel("Training step")
     ax1.set_ylabel("Mean token attribution (L2 norm)")
-    ax1.set_title("LayerIntegratedGradients — token attribution evolution\n"
-                  "Symmetric a/b attribution signals algorithmic generalisation")
+    ax1.set_title(
+        "LayerIntegratedGradients — token attribution evolution\n"
+        "Symmetric a/b lines signal algorithmic generalisation",
+    )
     ax1.legend(loc="upper left")
     ax1.grid(True, alpha=0.3)
 
@@ -195,42 +238,55 @@ def _save_attribution_evolution(
     plt.close(fig)
 
 
-def _save_attribution_heatmap(lig_evolution: np.ndarray, out_path: Path) -> None:
-    row_max = lig_evolution.max(axis=1, keepdims=True)
-    row_max = np.where(row_max == 0, 1.0, row_max)
-    normed = lig_evolution / row_max  # normalise per snapshot for relative comparison
-
-    fig, ax = plt.subplots(figsize=(4, 8), constrained_layout=True)
-    im = ax.imshow(normed, aspect="auto", cmap="hot", vmin=0, vmax=1, origin="upper")
-    ax.set_xticks([0, 1, 2])
-    ax.set_xticklabels(["a", "b", "="])
-    ax.set_ylabel("Snapshot index")
-    ax.set_title("Token attribution heatmap\n(row-normalised LIG magnitude)")
-    fig.colorbar(im, ax=ax, shrink=0.5, label="relative attribution")
-    fig.savefig(str(out_path), dpi=150)
-    plt.close(fig)
-
-
 def _save_conductance_chart(
     conductance: np.ndarray,
     checkpoint_indices: list[int],
+    snapshot_every: int,
     out_path: Path,
 ) -> None:
-    n_ckpts = len(checkpoint_indices)
-    x = np.arange(n_ckpts)
-    width = 0.25
+    """Two-panel chart: = output token (top) and operand tokens (bottom, own scale)."""
+    steps       = [(idx + 1) * snapshot_every for idx in checkpoint_indices]
+    step_labels = [f"step {s:,}" for s in steps]
+    x           = np.arange(len(checkpoint_indices))
+    width       = 0.35
 
-    fig, ax = plt.subplots(figsize=(8, 4), constrained_layout=True)
-    for i, (label, color) in enumerate(zip(TOKEN_LABELS, TOKEN_COLORS)):
-        ax.bar(x + i * width, conductance[:, i], width, label=label, color=color, alpha=0.8)
+    fig, (ax_eq, ax_ab) = plt.subplots(2, 1, figsize=(8, 6), constrained_layout=True)
+    fig.suptitle(
+        "LayerConductance on transformer encoder\n"
+        "How much does the transformer block contribute at each token position?",
+        fontsize=10,
+    )
 
-    ax.set_xticks(x + width)
-    ax.set_xticklabels([f"snap {idx}" for idx in checkpoint_indices])
-    ax.set_xlabel("Snapshot index")
-    ax.set_ylabel("Mean token conductance (L2 norm)")
-    ax.set_title("LayerConductance on transformer encoder — selected checkpoints")
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.3)
+    # Top: = token
+    ax_eq.bar(x, conductance[:, 2], color="tab:green", alpha=0.85,
+              label="equals = (output position)")
+    ax_eq.set_xticks(x)
+    ax_eq.set_xticklabels(step_labels)
+    ax_eq.set_ylabel("Conductance (L2 norm)")
+    ax_eq.set_title(
+        "Equals token — dominates because output_proj reads h[:, −1] (this position only)",
+        fontsize=9,
+    )
+    ax_eq.legend(fontsize=9)
+    ax_eq.grid(True, axis="y", alpha=0.3)
+
+    # Bottom: a and b — near-zero by architecture, but shown on their own scale
+    ax_ab.bar(x - width / 2, conductance[:, 0], width, color="tab:blue",  alpha=0.85,
+              label="operand a (first input)")
+    ax_ab.bar(x + width / 2, conductance[:, 1], width, color="tab:orange", alpha=0.85,
+              label="operand b (second input)")
+    ax_ab.set_xticks(x)
+    ax_ab.set_xticklabels(step_labels)
+    ax_ab.set_xlabel("Training step")
+    ax_ab.set_ylabel("Conductance (L2 norm)")
+    ax_ab.set_ylim(bottom=0)
+    ax_ab.set_title(
+        "Operand tokens — near-zero: transformer routes all output-relevant signal through =",
+        fontsize=9,
+    )
+    ax_ab.legend(fontsize=9)
+    ax_ab.grid(True, axis="y", alpha=0.3)
+
     fig.savefig(str(out_path), dpi=150)
     plt.close(fig)
 
@@ -247,8 +303,10 @@ def _save_accuracy_curves(
     ax.plot(steps, [a * 100 for a in test_accs],  label="Test accuracy",  linewidth=1.5)
     ax.set_xlabel("Training step")
     ax.set_ylabel("Accuracy (%)")
-    ax.set_title("Grokking — accuracy dynamics\n"
-                 "(train→100% = memorisation; test jump = generalisation)")
+    ax.set_title(
+        "Grokking — accuracy dynamics\n"
+        "(train→100% = memorisation phase;  test jump = generalisation / grokking)",
+    )
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)

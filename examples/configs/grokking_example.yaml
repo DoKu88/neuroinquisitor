@@ -19,8 +19,8 @@ n_heads: 4
 ffn_dim: 512
 
 # training
-num_steps: 15000
-snapshot_every: 150
+num_steps: 30000
+snapshot_every: 300
 lr: 0.001
 weight_decay: 1.0
 

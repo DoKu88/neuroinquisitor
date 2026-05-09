@@ -13,12 +13,12 @@ dependencies:
   - captum
 
 # training
-num_epochs: 2
+num_epochs: 20
 train_batch_size: 256
 test_batch_size: 512
 lr: 0.001
 weight_decay: 0.0001
-T_max: 60
+T_max: 20
 
 # attribution
 ig_n_steps: 30

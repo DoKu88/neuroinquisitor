@@ -21,7 +21,7 @@ d_mlp: 256
 patch_size: 4
 
 # training
-num_epochs: 30
+num_epochs: 50
 train_batch_size: 128
 test_batch_size: 256
 lr: 0.0003
