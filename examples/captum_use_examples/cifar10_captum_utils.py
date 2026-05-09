@@ -207,35 +207,35 @@ def make_attribution_video(
     fps: int = 4,
     cols_per_row: int = 5,
 ) -> Path:
-    """Four-panel animation: images | IG magnitude | GradCAM | signed IG."""
+    """2×2 animation: images | IG magnitude / GradCAM | signed IG."""
     display_imgs = [_denorm(attr_images[i]) for i in range(len(attr_images))]
     img_grid = _tile_rgb(display_imgs, cols=cols_per_row)
 
     signed_stack = np.stack(ig_signed_grids)
     v_abs = float(max(abs(signed_stack.min()), abs(signed_stack.max())))
 
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12), constrained_layout=True)
 
-    im_img = axes[0].imshow(img_grid, interpolation="nearest")
-    axes[0].set_title("Test images — one per class", fontsize=8)
-    axes[0].axis("off")
+    im_img = axes[0, 0].imshow(img_grid, interpolation="nearest")
+    axes[0, 0].set_title("Test images — one per class", fontsize=9)
+    axes[0, 0].axis("off")
 
-    im_ig = axes[1].imshow(ig_mag_grids[0], cmap="hot", vmin=0, vmax=1, interpolation="nearest")
-    fig.colorbar(im_ig, ax=axes[1], shrink=0.8, label="IG magnitude")
-    axes[1].set_title("IntegratedGradients — |attr| magnitude", fontsize=8)
-    axes[1].axis("off")
+    im_ig = axes[0, 1].imshow(ig_mag_grids[0], cmap="hot", vmin=0, vmax=1, interpolation="nearest")
+    fig.colorbar(im_ig, ax=axes[0, 1], shrink=0.8, label="IG magnitude")
+    axes[0, 1].set_title("IntegratedGradients — |attr| magnitude", fontsize=9)
+    axes[0, 1].axis("off")
 
-    im_gc = axes[2].imshow(gc_grids[0], cmap="jet", vmin=0, vmax=1, interpolation="nearest")
-    fig.colorbar(im_gc, ax=axes[2], shrink=0.8, label="GradCAM")
-    axes[2].set_title("LayerGradCam — conv2 (upsampled)", fontsize=8)
-    axes[2].axis("off")
+    im_gc = axes[1, 0].imshow(gc_grids[0], cmap="jet", vmin=0, vmax=1, interpolation="nearest")
+    fig.colorbar(im_gc, ax=axes[1, 0], shrink=0.8, label="GradCAM")
+    axes[1, 0].set_title("LayerGradCam — conv2 (upsampled)", fontsize=9)
+    axes[1, 0].axis("off")
 
-    im_signed = axes[3].imshow(
+    im_signed = axes[1, 1].imshow(
         ig_signed_grids[0], cmap="RdBu_r", vmin=-v_abs, vmax=v_abs, interpolation="nearest",
     )
-    fig.colorbar(im_signed, ax=axes[3], shrink=0.8, label="signed attr")
-    axes[3].set_title("IntegratedGradients — signed attribution", fontsize=8)
-    axes[3].axis("off")
+    fig.colorbar(im_signed, ax=axes[1, 1], shrink=0.8, label="signed attr")
+    axes[1, 1].set_title("IntegratedGradients — signed attribution", fontsize=9)
+    axes[1, 1].axis("off")
 
     title_text = fig.suptitle("", fontsize=12)
 
@@ -270,44 +270,50 @@ def save_final_panel(
     final_epoch: int,
     out_path: Path,
     n_steps: int = 50,
+    cols_per_row: int = 5,
 ) -> None:
-    """3-row × N-col figure: original | IG magnitude | GradCAM — one column per class."""
+    """2×2 figure: images | IG magnitude / GradCAM | signed IG — all 10 classes tiled."""
     model = model_factory()
     model.load_state_dict(snapshots.to_state_dict(final_epoch))
     model.eval()
 
-    N = attr_images.shape[0]
     ig_mag_ = ig_magnitude(model, attr_images, attr_labels, n_steps)
+    ig_sgn_ = ig_signed(model, attr_images, attr_labels, n_steps)
     gc_     = gradcam(model, model.conv2, attr_images, attr_labels)
 
-    fig, axes = plt.subplots(3, N, figsize=(N * 1.8, 6), constrained_layout=True)
+    display_imgs = [_denorm(attr_images[i]) for i in range(len(attr_images))]
+    img_grid    = _tile_rgb(display_imgs, cols=cols_per_row)
+    ig_mag_grid = _tile_maps(_normalise_per_sample(ig_mag_), cols_per_row)
+    gc_grid     = _tile_maps(_normalise_per_sample(gc_), cols_per_row)
+    ig_sgn_grid = _tile_maps(ig_sgn_, cols_per_row)
+    v_abs = float(max(abs(ig_sgn_grid.min()), abs(ig_sgn_grid.max())))
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12), constrained_layout=True)
     fig.suptitle(
         f"Final-epoch attributions (epoch {final_epoch}) — one sample per class",
         fontsize=11,
     )
 
-    for i in range(N):
-        cls = CIFAR10_CLASSES[attr_labels[i].item()]
+    axes[0, 0].imshow(img_grid, interpolation="nearest")
+    axes[0, 0].set_title("Test images", fontsize=9)
+    axes[0, 0].axis("off")
 
-        axes[0, i].imshow(_denorm(attr_images[i]), interpolation="nearest")
-        axes[0, i].set_title(cls, fontsize=7)
-        axes[0, i].axis("off")
+    im_ig = axes[0, 1].imshow(ig_mag_grid, cmap="hot", vmin=0, vmax=1, interpolation="nearest")
+    fig.colorbar(im_ig, ax=axes[0, 1], shrink=0.8, label="IG magnitude")
+    axes[0, 1].set_title("IntegratedGradients — |attr| magnitude", fontsize=9)
+    axes[0, 1].axis("off")
 
-        axes[1, i].imshow(
-            _normalise_per_sample(ig_mag_[i: i + 1])[0],
-            cmap="hot", vmin=0, vmax=1, interpolation="nearest",
-        )
-        axes[1, i].axis("off")
+    im_gc = axes[1, 0].imshow(gc_grid, cmap="jet", vmin=0, vmax=1, interpolation="nearest")
+    fig.colorbar(im_gc, ax=axes[1, 0], shrink=0.8, label="GradCAM")
+    axes[1, 0].set_title("LayerGradCam — conv2 (upsampled)", fontsize=9)
+    axes[1, 0].axis("off")
 
-        axes[2, i].imshow(
-            _normalise_per_sample(gc_[i: i + 1])[0],
-            cmap="jet", vmin=0, vmax=1, interpolation="nearest",
-        )
-        axes[2, i].axis("off")
-
-    axes[0, 0].set_ylabel("Image", fontsize=8)
-    axes[1, 0].set_ylabel("IG magnitude", fontsize=8)
-    axes[2, 0].set_ylabel("GradCAM (conv2)", fontsize=8)
+    im_signed = axes[1, 1].imshow(
+        ig_sgn_grid, cmap="RdBu_r", vmin=-v_abs, vmax=v_abs, interpolation="nearest",
+    )
+    fig.colorbar(im_signed, ax=axes[1, 1], shrink=0.8, label="signed attr")
+    axes[1, 1].set_title("IntegratedGradients — signed attribution", fontsize=9)
+    axes[1, 1].axis("off")
 
     fig.savefig(str(out_path), dpi=150)
     plt.close(fig)

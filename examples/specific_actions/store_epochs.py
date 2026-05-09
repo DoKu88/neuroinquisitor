@@ -65,10 +65,9 @@ def main() -> None:
     saved = sorted(log_dir.iterdir())
     print(f"\nfiles in log_dir: {[f.name for f in saved]}")
 
-    # metadata is stored in the index, not loaded from the .h5 file
     col = NeuroInquisitor.load(log_dir)
-    for entry in col._index.all():
-        print(f"  epoch {entry.epoch}  metadata={entry.metadata}")
+    print(f"epochs recorded : {col.epochs}")
+    print(f"layers tracked  : {col.layers}")
 
 
 if __name__ == "__main__":

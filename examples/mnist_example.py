@@ -77,8 +77,8 @@ def load_data(data_dir: Path, device: torch.device) -> tuple[DataLoader, DataLoa
     test_ds  = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin)
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
     return train_loader, test_loader
 
 

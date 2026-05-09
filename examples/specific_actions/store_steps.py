@@ -74,9 +74,7 @@ def main() -> None:
     print(f"\ntotal snapshots: {len(col)}")
     # step-only snapshots have no epoch, so col.epochs is empty
     print(f"epochs in index: {col.epochs}")
-    # access a specific snapshot via the raw index
-    entry = col._index.all()[3]
-    print(f"snapshot #3 — step={entry.step}  layers={entry.layers}")
+    print(f"layers tracked : {col.layers}")
 
 
 if __name__ == "__main__":
