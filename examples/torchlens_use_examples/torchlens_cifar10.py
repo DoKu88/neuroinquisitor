@@ -134,7 +134,7 @@ def load_data(
     # Fixed probe batch: same images every epoch so TorchLens comparisons are
     # apples-to-apples across checkpoints.
     probe_images, probe_labels = next(iter(
-        DataLoader(test_ds, batch_size=PROBE_BATCH_SIZE, shuffle=False, persistent_workers=True)
+        DataLoader(test_ds, batch_size=PROBE_BATCH_SIZE, shuffle=False)
     ))
 
     return train_loader, test_loader, probe_images, probe_labels

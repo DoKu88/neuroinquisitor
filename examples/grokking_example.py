@@ -98,7 +98,7 @@ def make_dataset(
 
 
 def make_test_loader(test_x: torch.Tensor, test_y: torch.Tensor, batch_size: int = 512) -> DataLoader:
-    return DataLoader(TensorDataset(test_x, test_y), batch_size=batch_size, shuffle=False, persistent_workers=True)
+    return DataLoader(TensorDataset(test_x, test_y), batch_size=batch_size, shuffle=False, num_workers=2, persistent_workers=True)
 
 
 # ---------------------------------------------------------------------------

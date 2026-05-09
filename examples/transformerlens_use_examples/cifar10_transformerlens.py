@@ -540,6 +540,7 @@ def analyze(
             TensorDataset(probe_images.cpu(), probe_labels.cpu()),
             batch_size=64,
             shuffle=False,
+            num_workers=2,
             persistent_workers=True,
         ),
         modules=replay_modules,

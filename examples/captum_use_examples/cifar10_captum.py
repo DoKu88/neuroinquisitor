@@ -229,6 +229,8 @@ def analyze(
         torch.utils.data.TensorDataset(attr_images, attr_labels),
         batch_size=len(attr_images),
         shuffle=False,
+        num_workers=2,
+        persistent_workers=True,
     )
     result = ReplaySession(
         run=run_dir,
