@@ -1,0 +1,29 @@
+name: TorchLens + CIFAR-10
+description: Time-based neural network analysis — replays NeuroInquisitor checkpoints through TorchLens to capture per-operation activations and gradients at every training epoch.
+tags:
+  - integration
+  - torchlens
+  - cifar10
+  - cnn
+dependencies:
+  - tqdm
+  - petname
+  - torchvision
+  - matplotlib
+  - torchlens
+
+# training
+num_epochs: 20
+train_batch_size: 256
+test_batch_size: 512
+lr: 0.001
+weight_decay: 0.0001
+
+# analysis
+probe_batch_size: 64
+target_modules:
+  - conv1
+  - conv2
+  - conv3
+  - fc1
+  - fc2

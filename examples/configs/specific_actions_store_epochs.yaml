@@ -1,0 +1,13 @@
+name: Store Epochs
+description: Epoch-based snapshotting with per-epoch metadata and compression.
+tags:
+  - specific-action
+  - snapshotting
+  - epochs
+
+# data
+n_samples: 64
+
+# training
+num_epochs: 5
+lr: 0.05

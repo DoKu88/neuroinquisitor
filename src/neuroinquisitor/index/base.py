@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from neuroinquisitor.backends.base import Backend
+    from neuroinquisitor.schema import CapturePolicy
 
 
 @dataclass
@@ -21,14 +22,10 @@ class IndexEntry:
     epoch: int | None = None
     step: int | None = None
     file_key: str = ""
-    layers: list[str] = None  # type: ignore[assignment]
-    metadata: dict[str, object] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.layers is None:
-            self.layers = []
-        if self.metadata is None:
-            self.metadata = {}
+    layers: list[str] = field(default_factory=list)
+    buffers: list[str] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
+    capture_policy: CapturePolicy | None = None
 
 
 class Index(ABC):

@@ -13,6 +13,8 @@ dependencies = [
     "torch>=2.0",
     "numpy>=1.24",
     "h5py>=3.9",
+    "pydantic>=2.0",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +25,34 @@ dev = [
     "mypy>=1.10",
 ]
 examples = [
+    # plotting & utilities
     "matplotlib>=3.7",
+    "tqdm>=4.65",
+    "pyyaml>=6.0",
+    "petname>=2.6",
+    # vision datasets
+    "torchvision>=0.15",
+    # attribution / interpretability
+    "captum>=0.7",
+    # activation tracing
+    "torchlens>=0.3",
+    # transformer interpretability
+    "transformer-lens>=1.14",
+    # embedding visualization
+    "fiftyone>=0.23",
+    "tensorboard>=2.13",
+    # analyzers (used by specific_actions/fiftyone_embed + tensorboard_projector)
+    "scikit-learn>=1.3",
+    "umap-learn>=0.5",
+]
+parquet = [
+    "pyarrow>=14.0",
+]
+analyzers = [
+    "scikit-learn>=1.3",
+]
+umap = [
+    "umap-learn>=0.5",
 ]
 
 [tool.setuptools.packages.find]
@@ -40,6 +69,13 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict = true
 
+[tool.coverage.run]
+omit = [
+    # compat tests only execute when optional packages are installed;
+    # excluding them prevents spurious coverage drops in CI
+    "tests/compat/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=neuroinquisitor --cov-fail-under=90"
+addopts = "--cov=neuroinquisitor --cov-fail-under=90 -rs"

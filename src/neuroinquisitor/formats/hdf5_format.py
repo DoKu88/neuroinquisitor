@@ -11,6 +11,7 @@ import numpy as np
 from .base import Format
 
 _GZIP_LEVEL = 4
+_BUFFERS_GROUP = "buffers"
 
 
 class HDF5Format(Format):
@@ -21,8 +22,11 @@ class HDF5Format(Format):
     ``_GZIP_LEVEL``).  Selective layer loading is supported via dataset-level
     reads — only the requested tensors are decompressed.
 
-    Metadata is stored as HDF5 file-level attributes.  All values are
-    coerced to strings to avoid HDF5 type ambiguity.
+    Parameters are stored as top-level HDF5 datasets.  When buffer capture
+    is active, buffer tensors are stored under the ``"buffers/"`` group so
+    they are always distinguishable from parameters without reading metadata.
+
+    Scalar metadata is stored as HDF5 file-level attributes (coerced to strings).
     """
 
     @property
@@ -34,6 +38,7 @@ class HDF5Format(Format):
         params: dict[str, np.ndarray],
         metadata: dict[str, object],
         compress: bool = False,
+        buffers: dict[str, np.ndarray] | None = None,
     ) -> bytes:
         buf = io.BytesIO()
         compression = "gzip" if compress else None
@@ -47,6 +52,15 @@ class HDF5Format(Format):
                     compression=compression,
                     compression_opts=compression_opts,
                 )
+            if buffers:
+                grp = f.require_group(_BUFFERS_GROUP)
+                for name, array in buffers.items():
+                    grp.create_dataset(
+                        name,
+                        data=np.ascontiguousarray(array),
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
             for k, v in metadata.items():
                 f.attrs[k] = str(v)
 
@@ -58,9 +72,27 @@ class HDF5Format(Format):
         layers: set[str] | None = None,
     ) -> dict[str, np.ndarray]:
         with h5py.File(str(path), "r") as f:
-            keys = list(f.keys()) if layers is None else [k for k in f.keys() if k in layers]
-            return {k: f[k][()] for k in keys}
+            param_keys = [k for k in f.keys() if isinstance(f[k], h5py.Dataset)]
+            if layers is not None:
+                param_keys = [k for k in param_keys if k in layers]
+            return {k: f[k][()] for k in param_keys}
+
+    def read_buffers(
+        self,
+        path: Path,
+        names: set[str] | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Read buffer tensors from the ``"buffers/"`` group of *path*.
+
+        Returns an empty dict if the snapshot has no buffers.
+        """
+        with h5py.File(str(path), "r") as f:
+            if _BUFFERS_GROUP not in f:
+                return {}
+            grp = f[_BUFFERS_GROUP]
+            keys = list(grp.keys()) if names is None else [k for k in grp.keys() if k in names]
+            return {k: grp[k][()] for k in keys}
 
     def list_layers(self, path: Path) -> list[str]:
         with h5py.File(str(path), "r") as f:
-            return list(f.keys())
+            return [k for k in f.keys() if isinstance(f[k], h5py.Dataset)]

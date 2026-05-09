@@ -1,0 +1,29 @@
+name: TransformerLens + CIFAR-10 ViT
+description: Mechanistic interpretability of a PatchViT on CIFAR-10 — attention patterns, logit lens, activation patching, and weight SVD across NeuroInquisitor checkpoints.
+tags:
+  - integration
+  - transformerlens
+  - cifar10
+  - vit
+  - mechanistic-interpretability
+dependencies:
+  - tqdm
+  - petname
+  - torchvision
+  - matplotlib
+  - transformer_lens
+
+# model
+n_layers: 4
+n_heads: 4
+d_model: 128
+d_mlp: 256
+patch_size: 4
+
+# training
+num_epochs: 50
+train_batch_size: 128
+test_batch_size: 256
+lr: 0.0003
+weight_decay: 0.1
+label_smoothing: 0.1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,11 +19,38 @@ from neuroinquisitor.index.json_index import JSONIndex
 from neuroinquisitor.loader import load as _load
 from neuroinquisitor.loader import resolve_backend as _resolve_backend
 from neuroinquisitor.loader import resolve_format as _resolve_format
+from neuroinquisitor.schema import CapturePolicy, RunMetadata
 
 if TYPE_CHECKING:
     import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_git_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _model_class_path(model: nn.Module) -> str:
+    t = type(model)
+    return f"{t.__module__}.{t.__qualname__}"
+
+
+def _detect_dtype_device(model: nn.Module) -> tuple[str | None, str | None]:
+    for param in model.parameters():
+        return str(param.dtype), str(param.device)
+    return None, None
 
 
 class NeuroInquisitor:
@@ -47,6 +75,14 @@ class NeuroInquisitor:
     format:
         Snapshot file format.  Pass ``"hdf5"`` (default) or a
         :class:`~neuroinquisitor.formats.base.Format` instance.
+    capture_policy:
+        Declares what is captured at snapshot time.  Defaults to
+        :class:`~neuroinquisitor.schema.CapturePolicy` with parameters
+        only (no buffers, no optimizer state).
+    run_metadata:
+        Provenance metadata for this run.  When ``None`` and
+        ``create_new=True``, git commit, model class, dtype, and device
+        are auto-detected.  Ignored when ``create_new=False``.
     """
 
     def __init__(
@@ -57,10 +93,13 @@ class NeuroInquisitor:
         create_new: bool = True,
         backend: str | Backend = "local",
         format: str | Format = "hdf5",
+        capture_policy: CapturePolicy | None = None,
+        run_metadata: RunMetadata | None = None,
     ) -> None:
         self._model = model
         self._compress = compress
         self._closed = False
+        self._capture_policy = capture_policy or CapturePolicy()
 
         self._log_dir = Path(log_dir)
         self._backend = _resolve_backend(backend, self._log_dir)
@@ -75,6 +114,16 @@ class NeuroInquisitor:
                     "Pass create_new=False to append to it, or use a different log_dir."
                 )
             self._index = JSONIndex(self._backend)
+            if run_metadata is None:
+                dtype, device = _detect_dtype_device(model)
+                run_metadata = RunMetadata(
+                    git_commit=_detect_git_commit(),
+                    model_class=_model_class_path(model),
+                    dtype=dtype,
+                    device=device,
+                )
+            self._index.set_run_metadata(run_metadata)
+            self._index.set_capture_policy(self._capture_policy)
             self._index.save()
         else:
             if not index_exists:
@@ -115,7 +164,11 @@ class NeuroInquisitor:
         step: int | None = None,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        """Snapshot all model parameters and persist to the backend.
+        """Snapshot model state and persist to the backend.
+
+        Captures all parameters, and buffers if the active
+        :class:`~neuroinquisitor.schema.CapturePolicy` has
+        ``capture_buffers=True``.
 
         Parameters
         ----------
@@ -155,6 +208,15 @@ class NeuroInquisitor:
             for name, param in self._model.named_parameters()
         }
 
+        buffers: dict[str, np.ndarray] | None = None
+        if self._capture_policy.capture_buffers:
+            raw_buffers = {
+                name: buf.detach().cpu().numpy()
+                for name, buf in self._model.named_buffers()
+                if buf is not None
+            }
+            buffers = raw_buffers if raw_buffers else None
+
         file_metadata: dict[str, object] = {}
         if epoch is not None:
             file_metadata["epoch"] = epoch
@@ -163,17 +225,23 @@ class NeuroInquisitor:
         if metadata:
             file_metadata.update(metadata)
 
-        data = self._format.write(params, file_metadata, compress=self._compress)
+        data = self._format.write(
+            params,
+            file_metadata,
+            compress=self._compress,
+            buffers=buffers,
+        )
         self._backend.write(file_key, data)
 
-        layer_names = list(params.keys())
         self._index.add(
             IndexEntry(
                 epoch=epoch,
                 step=step,
                 file_key=file_key,
-                layers=layer_names,
+                layers=list(params.keys()),
+                buffers=list(buffers.keys()) if buffers else [],
                 metadata=metadata or {},
+                capture_policy=self._capture_policy,
             )
         )
         logger.debug("Snapshot written: %s", file_key)

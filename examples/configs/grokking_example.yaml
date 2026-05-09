@@ -1,0 +1,29 @@
+name: Grokking Example
+description: Modular addition (Power et al. 2022) — full NeuroInquisitor showcase demonstrating the two-phase grokking phenomenon with step-based snapshotting.
+tags:
+  - full-showcase
+  - transformer
+  - grokking
+dependencies:
+  - tqdm
+  - petname
+  - matplotlib
+
+# task
+p: 97
+train_frac: 0.5
+
+# model
+d_model: 128
+n_heads: 4
+ffn_dim: 512
+
+# training
+num_steps: 30000
+snapshot_every: 300
+lr: 0.001
+weight_decay: 1.0
+
+# analysis
+replay_modules:
+  - output_proj

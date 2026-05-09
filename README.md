@@ -2,35 +2,32 @@
 
 Neural network weight observability for PyTorch — snapshot, persist, and reload model weights during training, then analyse how they evolve.
 
-- **One observer, one line per snapshot.** Attach `NeuroInquisitor` to any `nn.Module` and call `.snapshot(epoch=…)` (or `step=…`) inside your training loop.
+- **One observer, one line per snapshot.** Attach `NeuroInquisitor` to any `nn.Module` and call `.snapshot(epoch=…)` or `.snapshot(step=…)` inside your training loop.
 - **One file per snapshot, plus an index.** Each snapshot is an independent HDF5 file; an `index.json` tracks epochs, steps, layer names, and per-snapshot metadata. Append more snapshots to a run later without rewriting anything.
 - **Lazy, filterable read-back.** `NeuroInquisitor.load(...)` returns a `SnapshotCollection` that touches no tensor data until you ask for it — and lets you slice by epoch, layer, or both, with parallel reads under the hood.
+- **Built-in analyzers.** Five standalone functions (`probe`, `projection_embed`, `cosine_similarity_matrix`, `spectral_summary`, `weight_trajectory`) accept NumPy/PyTorch tensors and return a plain `pd.DataFrame`.
 - **Pluggable storage and format.** Local filesystem + HDF5 are built in; both the `Backend` and `Format` are abstract so you can drop in your own (object stores, Zarr, Safetensors, etc.).
 
 ## Installation
+
+Install the core library:
 
 ```bash
 pip install neuroinquisitor
 ```
 
-To run the visualisation examples (matplotlib):
+To run **all examples** (includes matplotlib, torchvision, captum, torchlens, transformer-lens, fiftyone, tensorboard, scikit-learn, and more):
 
 ```bash
 pip install "neuroinquisitor[examples]"
 ```
 
-Some examples need additional packages beyond the `examples` extra:
-
-```bash
-pip install tqdm petname torchvision
-```
-
-For development:
+For development (adds pytest, ruff, mypy):
 
 ```bash
 git clone https://github.com/doku88/neuroinquisitor.git
 cd neuroinquisitor
-pip install -e ".[dev]"
+pip install -e ".[dev,examples]"
 ```
 
 ## Quick start
@@ -68,7 +65,7 @@ After training, `./runs/quickstart/` contains one `epoch_XXXX.h5` per snapshot p
 
 ## Loading and analysing snapshots
 
-`NeuroInquisitor.load()` does **not** require a model — it's a pure read path for post-training analysis. Nothing is read from disk until you ask for it.
+`NeuroInquisitor.load()` does **not** require a model — it is a pure read path for post-training analysis. No tensor data is read until you ask for it.
 
 ```python
 from neuroinquisitor import NeuroInquisitor
@@ -89,11 +86,48 @@ fc1_history = col.by_layer("0.weight")    # dict[int, np.ndarray]
 late_fc1 = col.select(epochs=range(5, 10), layers="0.weight")
 ```
 
-You can also push the filters into `load()` itself:
+Filters can also be pushed into `load()` itself:
 
 ```python
 late = NeuroInquisitor.load("./runs/quickstart", epochs=range(5, 10))
 fc1_only = NeuroInquisitor.load("./runs/quickstart", layers="0.weight")
+```
+
+## Built-in analyzers
+
+```python
+from neuroinquisitor.analyzers import (
+    probe,
+    projection_embed,
+    cosine_similarity_matrix,
+    spectral_summary,
+    weight_trajectory,
+)
+```
+
+Each function accepts a NumPy array or PyTorch tensor and returns a `pd.DataFrame`.
+
+| Function | What it computes |
+|---|---|
+| `probe(X, y)` | Linear probe accuracy and weights for an activation matrix |
+| `projection_embed(X)` | 2-D/3-D coordinates via PCA, t-SNE, or UMAP |
+| `cosine_similarity_matrix(X)` | Pairwise cosine similarity between rows |
+| `spectral_summary(W)` | Top singular values and explained variance of a weight matrix |
+| `weight_trajectory(snapshots)` | L2 distance, cosine similarity, and norm over training |
+
+## Replay sessions
+
+`ReplaySession` restores a checkpoint into a model and runs a forward (and optional backward) pass, capturing activations, gradients, or raw logits without touching the original training state.
+
+```python
+from neuroinquisitor import NeuroInquisitor, ReplaySession
+
+col = NeuroInquisitor.load("./runs/quickstart")
+session = ReplaySession(model, col)
+
+result = session.run(epoch=5, dataset=my_dataset, capture=["activations", "logits"])
+result.activations   # dict[str, torch.Tensor]
+result.logits        # torch.Tensor  (N, num_classes)
 ```
 
 ## API reference
@@ -101,11 +135,11 @@ fc1_only = NeuroInquisitor.load("./runs/quickstart", layers="0.weight")
 ### `NeuroInquisitor(model, log_dir, compress, create_new, backend, format)`
 
 | Parameter | Default | Description |
-|-----------|---------|-------------|
+|---|---|---|
 | `model` | — | `nn.Module` whose parameters are snapshotted |
 | `log_dir` | `"."` | Directory for snapshot files and `index.json` |
-| `compress` | `False` | Hint to the format to use compression (gzip for HDF5) |
-| `create_new` | `True` | `True` → start a fresh run, errors if an index already exists. `False` → append to an existing run, errors if no index is found. |
+| `compress` | `False` | Enable gzip compression in HDF5 snapshots |
+| `create_new` | `True` | `True` → fresh run, errors if index exists. `False` → append to existing run, errors if no index found. |
 | `backend` | `"local"` | Storage backend — `"local"` or a `Backend` instance |
 | `format` | `"hdf5"` | Snapshot file format — `"hdf5"` or a `Format` instance |
 
@@ -113,7 +147,7 @@ fc1_only = NeuroInquisitor.load("./runs/quickstart", layers="0.weight")
 
 Writes all current model parameters to a new snapshot file and updates the index.
 
-- At least one of `epoch` or `step` must be supplied; you can also supply both.
+- At least one of `epoch` or `step` must be supplied; both may be supplied together.
 - Each `(epoch, step)` combination must be unique within a run.
 - `metadata` is an arbitrary `dict` of scalar values stored alongside the snapshot in the index. The keys `"epoch"` and `"step"` are reserved.
 
@@ -121,76 +155,119 @@ Writes all current model parameters to a new snapshot file and updates the index
 
 Finalises the run. Safe to call multiple times. Forgetting to call `close()` raises a `ResourceWarning` at garbage-collection time.
 
-### `NeuroInquisitor.load(log_dir, backend="local", format="hdf5", epochs=None, layers=None) → SnapshotCollection`
+### `NeuroInquisitor.load(log_dir, backend, format, epochs, layers) → SnapshotCollection`
 
-Classmethod (no model needed). Optional `epochs` / `layers` arguments restrict the returned collection up front.
+Classmethod — no model needed. Optional `epochs` / `layers` arguments restrict the returned collection up front.
 
 ### `SnapshotCollection`
 
 A lazy, filterable view over a run. No tensor data is read until you call `by_epoch` or `by_layer`; `select` only composes filter sets.
 
 | Method / property | Returns | Notes |
-|-------------------|---------|-------|
+|---|---|---|
 | `col.epochs` | `list[int]` | Sorted epoch indices in the current view |
 | `col.layers` | `list[str]` | Parameter names in the current view |
 | `len(col)` | `int` | Number of snapshots in the current view |
 | `col.by_epoch(epoch)` | `dict[str, np.ndarray]` | All (filtered) layers for one epoch |
-| `col.by_layer(name, max_workers=8)` | `dict[int, np.ndarray]` | One layer across all snapshots, read in parallel (keys are epoch if present, otherwise step) |
+| `col.by_layer(name, max_workers=8)` | `dict[int, np.ndarray]` | One layer across all snapshots, read in parallel |
 | `col.select(epochs=…, layers=…)` | `SnapshotCollection` | Narrow the view; composes with existing filters |
+| `col.to_state_dict(epoch)` | `dict[str, torch.Tensor]` | Ready to pass to `model.load_state_dict()` |
+| `col.to_numpy(epoch)` | `dict[str, np.ndarray]` | Same as `by_epoch`, explicit alias |
 
 `epochs` accepts `int | list[int] | range`; `layers` accepts `str | list[str]`.
 
 ## Examples
 
-The [`examples/`](./examples) directory walks through every part of the API. Most examples use timestamped output folders, while the larger dataset demos use petname-based run directories.
-
-### `examples/basic_usage.py`
-Train a tiny MLP for 30 epochs, snapshot weights each epoch, then render a GIF of the FC layer heatmaps over time. Good first read after the quick start.
-
-### `examples/store_epochs.py`
-The minimal **write** path: epoch-keyed snapshots with `metadata={"loss": ..., "lr": ...}` and gzip compression. Lists the resulting `epoch_XXXX.h5` files and prints the metadata back from the index.
-
-### `examples/store_steps.py`
-Snapshot at intra-epoch **step** granularity. Shows the `observer.snapshot(step=...)` form (and the optional `epoch=..., step=...` combination) for cases where one epoch spans thousands of batches.
-
-### `examples/append_run.py`
-Resume a run with `create_new=False`. Two training "sessions" write to the same `log_dir`; the second session adds epochs 5–9 alongside the first session's 0–4 without disturbing them. Demonstrates that `NeuroInquisitor.load(log_dir)` sees the combined run.
-
-### `examples/load_and_filter.py`
-A tour of every read pattern on `SnapshotCollection`:
-
-1. `NeuroInquisitor.load(log_dir)` — load everything (lazy, just `index.json`).
-2. `col.by_epoch(N)` — all layers at one epoch.
-3. `col.by_layer("fc1.weight")` — one layer across all epochs (parallel reads).
-4. `NeuroInquisitor.load(log_dir, epochs=range(7, 10))` — filter epochs at load time.
-5. `NeuroInquisitor.load(log_dir, layers="fc1.weight")` — filter layers at load time.
-6. Combine both filters in `load()`.
-7. Refine an existing collection with chained `col.select(...)` calls.
-
-### `examples/snapshot_selection.py`
-Trains a TinyMLP for 40 epochs, then renders five labelled GIFs using different `col.select(...)` slices (all, early, late, single layer, late × single layer). The GIF helper pre-fetches all needed tensors with `col.by_layer()` for one parallel read per layer, then animates from an in-memory cache with zero further I/O — a good template for visualisation tooling.
-
-### `examples/mnist_example.py`
-A real training loop: a small CNN on MNIST for 100 epochs with `tqdm` progress bars, snapshotting after every epoch with `{"loss", "test_loss", "accuracy"}` metadata. After training it loads the full collection with `NeuroInquisitor.load(run_dir)` and produces both an MP4 of the conv/FC weights evolving over time and a train/test loss curve PNG. Run names are generated with `petname` so each run lives in its own directory under `outputs/MNIST_example/<run-name>/`.
-
-### `examples/cifar10_example.py`
-End-to-end CIFAR-10 training with a deeper CNN, per-epoch snapshots, and a multi-panel MP4 showing conv filter evolution, conv-norm timelines, and weight deltas. Saves outputs under `outputs/CIFAR10_example/<run-name>/` with a loss-curve PNG.
-
-### `examples/grokking_example.py`
-A grokking-style modular addition experiment with a 1-layer transformer, tracking 15k optimization steps and rendering a four-panel MP4 (embedding similarity, Fourier power timeline, component norms, and output projection) plus an accuracy-curve PNG under `outputs/grokking_example/<run-name>/`.
-
-Run any example with:
+Install the examples extra first, then run any script directly or run all of them at once:
 
 ```bash
-python examples/basic_usage.py
-python examples/mnist_example.py
-python examples/cifar10_example.py
+pip install "neuroinquisitor[examples]"
+
+# Run everything in order (writes a YAML status log to outputs/status_run/)
+python examples/run_all.py
+
+# Or run individual examples
+python examples/multi_arch_showcase.py
 python examples/grokking_example.py
 ```
 
-## On-disk layout
+### Main demos
 
-A run directory looks like this:
+#### `examples/multi_arch_showcase.py`
+The recommended starting point. Trains three architectures — `TinyMLP`, `SmallCNN`, and `TinyTransformer` — on the same synthetic sequence classification task (no dataset downloads). All three use an identical NI setup, demonstrating that the API is architecture-agnostic.
+
+NI features covered: `CapturePolicy`, `RunMetadata`, `snapshot()`, `SnapshotCollection` (`by_epoch`, `by_layer`, `select`, `to_state_dict`), `ReplaySession`.
+
+```bash
+python examples/multi_arch_showcase.py
+```
+
+#### `examples/grokking_example.py`
+A grokking-style modular addition experiment with a 1-layer transformer, tracking 15 000 optimisation steps. Demonstrates step-based snapshotting and shows the phase transition (memorisation → generalisation) as a visible discontinuity in weight space. Outputs a four-panel MP4 (embedding similarity, Fourier power timeline, component norms, output projection) plus an accuracy-curve PNG.
+
+```bash
+python examples/grokking_example.py
+```
+
+---
+
+### Integration examples
+
+#### `examples/captum_use_examples/grokking_captum.py`
+Shows two integration paths between NI checkpoints and Captum attribution:
+
+- **Path A** — `col.to_state_dict(epoch)` → `model.load_state_dict()` → Captum
+- **Path B** — `ReplaySession.run()` → `result.activations` → Captum
+
+Attribution methods demonstrated: `LayerIntegratedGradients` on the token embedding, `LayerConductance` on the transformer encoder — both tracked over every checkpoint so you can watch attribution evolve across the grokking phase transition.
+
+```bash
+python examples/captum_use_examples/grokking_captum.py
+```
+
+#### `examples/torchlens_use_examples/torchlens_cifar10.py`
+Combines NI with TorchLens to produce per-operation activation analysis at every training epoch — a film strip of `log_forward_pass` output rather than a single snapshot. Trains a CNN on CIFAR-10 and produces activation-evolution and gradient-flow visualisations over time.
+
+```bash
+python examples/torchlens_use_examples/torchlens_cifar10.py
+```
+
+#### `examples/transformerlens_use_examples/cifar10_transformerlens.py`
+Trains a patch-based Vision Transformer (`PatchViT`) on CIFAR-10 with NI snapshots, then runs five TransformerLens analyses across all checkpoints: activation caching, attention pattern evolution, logit lens, activation patching, and weight SVD over training.
+
+```bash
+python examples/transformerlens_use_examples/cifar10_transformerlens.py
+```
+
+---
+
+### Specific-action examples (`examples/specific_actions/`)
+
+Focused, single-concept scripts — good templates to copy from.
+
+| Script | What it shows |
+|---|---|
+| `store_epochs.py` | Minimal epoch-keyed write path with metadata and compression |
+| `store_steps.py` | Intra-epoch step-keyed snapshots; `epoch + step` combined keys |
+| `append_run.py` | Resume a run with `create_new=False`; two sessions, one `log_dir` |
+| `load_and_filter.py` | Every `SnapshotCollection` access pattern in one file |
+| `snapshot_selection.py` | Five `col.select()` slices rendered as labelled GIFs |
+| `replay_logits.py` | `ReplaySession` with `capture=["logits"]`; useful for comparing pre/post fine-tune |
+| `track_activations.py` | `ReplaySession` with `capture=["activations"]`; `activation_reduction` options |
+| `track_gradients.py` | `ReplaySession` with `capture=["gradients"]`; sensitivity analysis |
+| `tracin_example.py` | Feed NI checkpoints into Captum `TracInCP` for influence estimation |
+| `tensorboard_projector.py` | Convert `projection_embed` output to TensorBoard Projector TSV format |
+| `fiftyone_embed.py` | Attach `projection_embed` coordinates to a FiftyOne dataset |
+
+```bash
+python examples/specific_actions/store_epochs.py
+python examples/specific_actions/track_activations.py
+# etc.
+```
+
+---
+
+## On-disk layout
 
 ```
 runs/my_run/
@@ -199,7 +276,6 @@ runs/my_run/
 ├── epoch_0001.h5
 ├── epoch_0002_step_000250.h5
 ├── step_000251.h5
-├── ...
 └── epoch_0099.h5
 ```
 
@@ -212,15 +288,11 @@ Both `Backend` (where bytes live) and `Format` (how a snapshot is serialised) ar
 
 ## Development
 
-Run tests:
-
 ```bash
+# Run tests
 pytest
-```
 
-Run lint and type checks:
-
-```bash
+# Lint and type checks
 ruff check src tests
 mypy src
 ```

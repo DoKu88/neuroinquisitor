@@ -5,6 +5,18 @@ from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.core import NeuroInquisitor
 from neuroinquisitor.formats import Format, HDF5Format
 from neuroinquisitor.index import Index, IndexEntry, JSONIndex
+from neuroinquisitor.replay import (
+    CheckpointSelector,
+    ReplayConfig,
+    ReplayMetadata,
+    ReplayResult,
+    ReplaySession,
+    TensorMap,
+)
+from neuroinquisitor.schema import CapturePolicy, RunManifest, RunMetadata
+
+# analyzers sub-package — import the module so `neuroinquisitor.analyzers` resolves
+from neuroinquisitor import analyzers  # noqa: F401
 
 __version__ = "0.1.0"
 __all__ = [
@@ -17,5 +29,15 @@ __all__ = [
     "Index",
     "IndexEntry",
     "JSONIndex",
+    "CapturePolicy",
+    "RunManifest",
+    "RunMetadata",
+    "ReplaySession",
+    "ReplayConfig",
+    "ReplayResult",
+    "ReplayMetadata",
+    "CheckpointSelector",
+    "TensorMap",
+    "analyzers",
     "__version__",
 ]

@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import yaml
 
 from neuroinquisitor import NeuroInquisitor
 
@@ -33,16 +34,16 @@ class TinyMLP(nn.Module):
         return self.fc2(self.fc1(x).relu())
 
 
-def _train_and_save(log_dir: Path) -> None:
+def _train_and_save(log_dir: Path, num_epochs: int, lr: float, n_samples: int) -> None:
     torch.manual_seed(0)
-    X = torch.randn(64, 4)
+    X = torch.randn(n_samples, 4)
     y = (X.sum(1, keepdim=True) > 0).float()
     model = TinyMLP()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     loss_fn = nn.BCEWithLogitsLoss()
 
     observer = NeuroInquisitor(model, log_dir=log_dir)
-    for epoch in range(10):
+    for epoch in range(num_epochs):
         optimizer.zero_grad()
         loss_fn(model(X), y).backward()
         optimizer.step()
@@ -51,12 +52,16 @@ def _train_and_save(log_dir: Path) -> None:
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent.parent / "configs" / "specific_actions_load_and_filter.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "load_and_filter" / timestamp
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "load_and_filter" / timestamp
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 
-    _train_and_save(log_dir)
+    _train_and_save(log_dir, cfg["num_epochs"], cfg["lr"], cfg["n_samples"])
 
     # ------------------------------------------------------------------
     # 1. Load everything — lazy, only reads index.json
