@@ -1,0 +1,39 @@
+name: Grokking + Captum
+description: LayerIntegratedGradients and LayerConductance on a transformer trained on modular addition, replayed over NeuroInquisitor checkpoints via col.to_state_dict() and ReplaySession.
+tags:
+  - integration
+  - captum
+  - transformer
+  - grokking
+dependencies:
+  - tqdm
+  - petname
+  - matplotlib
+  - captum
+
+# task
+p: 97
+train_frac: 0.5
+
+# model
+d_model: 128
+n_heads: 4
+ffn_dim: 512
+
+# training
+# Note: full grokking generalisation typically requires ~15 000+ steps.
+# Increase num_steps to observe the complete memorisation → generalisation transition.
+num_steps: 5000
+snapshot_every: 50
+lr: 0.001
+weight_decay: 1.0
+
+# attribution
+ig_n_steps: 30
+attr_samples: 32
+n_conductance_checkpoints: 5
+
+# replay
+replay_modules:
+  - transformer
+  - output_proj
