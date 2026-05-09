@@ -1,0 +1,14 @@
+name: Store Steps
+description: Step-based snapshotting for intra-epoch granularity — snapshots keyed by step, epoch, or both.
+tags:
+  - specific-action
+  - snapshotting
+  - steps
+
+# data
+n_samples: 128
+
+# training
+num_outer_epochs: 2
+batch_size: 32
+lr: 0.05

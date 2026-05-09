@@ -1,31 +1,50 @@
-"""Basic usage example: train a tiny MLP, snapshot weights each epoch, plot a GIF.
+"""Basic NeuroInquisitor feature showcase with a tiny MLP.
 
-Requires matplotlib:
-    pip install "neuroinquisitor[examples]"
-    # or: pip install matplotlib
+Demonstrates every implemented capability:
+  • CapturePolicy  — capture parameters, buffers, and optimizer state
+  • RunMetadata    — attach training provenance to the run
+  • Snapshots      — weight + buffer checkpoints with per-epoch metadata
+  • SnapshotCollection — by_epoch, by_layer, select, to_state_dict, to_numpy
+  • ReplaySession  — activations, gradients, and logits via forward/backward hooks
+  • Visualization  — weight-evolution video, replay figure, and loss curves
+
+Run:
+    python examples/basic_usage.py
+
+Requires:
+    pip install petname matplotlib
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
-import matplotlib.animation as animation
-import matplotlib.pyplot as plt
 import numpy as np
+import petname
 import torch
+import yaml
 import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
-from neuroinquisitor import NeuroInquisitor
+from neuroinquisitor import (
+    CapturePolicy,
+    NeuroInquisitor,
+    ReplaySession,
+    RunMetadata,
+    SnapshotCollection,
+)
+from basic_usage_utils import generate_visualizations
 
-# FC layers to visualise: (snapshot_key, display_label)
-FC_LAYERS = [
-    ("fc1.weight", "fc1  (16 × 4)"),
-    ("fc2.weight", "fc2  (1 × 16)"),
-]
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
 
 
 class TinyMLP(nn.Module):
+    """Two-layer MLP for binary classification (4 features → 1 logit)."""
+
     def __init__(self) -> None:
         super().__init__()
         self.fc1 = nn.Linear(4, 16)
@@ -36,117 +55,221 @@ class TinyMLP(nn.Module):
         return self.fc2(self.relu(self.fc1(x)))
 
 
-def _make_gif(
-    weight_history: list[dict[str, np.ndarray]],
-    out_path: Path,
-    fps: int = 4,
-) -> None:
-    """Save a GIF with one subplot per FC layer, weights as heatmaps over time."""
-    n_epochs = len(weight_history)
-    n_layers = len(FC_LAYERS)
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
 
-    # Determine a fixed, symmetric colour scale per layer so changes are visible.
-    vlims: list[tuple[float, float]] = []
-    for key, _ in FC_LAYERS:
-        all_vals = np.concatenate([snap[key].ravel() for snap in weight_history])
-        abs_max = float(np.abs(all_vals).max())
-        vlims.append((-abs_max, abs_max))
 
-    fig, axes = plt.subplots(
-        1, n_layers, figsize=(5 * n_layers, 4), constrained_layout=True
-    )
-    if n_layers == 1:
-        axes = [axes]
+def load_data(
+    device: torch.device,
+    train_batch_size: int,
+    test_batch_size: int,
+    n_samples: int,
+    n_train: int,
+) -> tuple[DataLoader, DataLoader]:
+    torch.manual_seed(0)
+    X = torch.randn(n_samples, 4)
+    y = (X.sum(dim=1, keepdim=True) > 0).float()
 
-    # Initial frame
-    images = []
-    for ax, (key, label), (vmin, vmax) in zip(axes, FC_LAYERS, vlims):
-        im = ax.imshow(
-            weight_history[0][key],
-            aspect="auto",
-            cmap="RdBu_r",
-            vmin=vmin,
-            vmax=vmax,
-            interpolation="nearest",
+    X_train, y_train = X[:n_train], y[:n_train]
+    X_test,  y_test  = X[n_train:], y[n_train:]
+
+    pin = device.type == "cuda"
+    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=train_batch_size, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=test_batch_size,  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    return train_loader, test_loader
+
+
+# ---------------------------------------------------------------------------
+# Train
+# ---------------------------------------------------------------------------
+
+
+def train(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    loss_fn: nn.Module,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    observer: NeuroInquisitor,
+    device: torch.device,
+    num_epochs: int,
+) -> tuple[list[float], list[float]]:
+    train_loss_history: list[float] = []
+    test_loss_history:  list[float] = []
+
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        step = 0
+        for step, (X_batch, y_batch) in enumerate(train_loader):
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            optimizer.zero_grad()
+            loss = loss_fn(model(X_batch), y_batch)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        avg_train_loss = running_loss / len(train_loader)
+        train_loss_history.append(avg_train_loss)
+
+        model.eval()
+        test_loss_acc = 0.0
+        with torch.no_grad():
+            for X_batch, y_batch in test_loader:
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                test_loss_acc += loss_fn(model(X_batch), y_batch).item()
+
+        avg_test_loss = test_loss_acc / len(test_loader)
+        test_loss_history.append(avg_test_loss)
+
+        print(f"  epoch {epoch:2d}  train loss={avg_train_loss:.4f}  test loss={avg_test_loss:.4f}")
+
+        observer.snapshot(
+            epoch=epoch,
+            step=step,
+            metadata={"loss": avg_train_loss, "test_loss": avg_test_loss},
         )
-        fig.colorbar(im, ax=ax, shrink=0.8, label="weight value")
-        ax.set_title(label, fontsize=11)
-        ax.set_xlabel("input dim")
-        ax.set_ylabel("output dim")
-        images.append(im)
 
-    epoch_text = fig.text(0.5, 1.01, "", ha="center", va="bottom", fontsize=12)
+    observer.close()
+    print(f"\nTraining done. {num_epochs} snapshots saved.")
+    return train_loss_history, test_loss_history
 
-    def update(frame: int) -> list:
-        epoch_text.set_text(f"Epoch {frame}")
-        for im, (key, _) in zip(images, FC_LAYERS):
-            im.set_data(weight_history[frame][key])
-        return [*images, epoch_text]
 
-    ani = animation.FuncAnimation(
-        fig,
-        update,
-        frames=n_epochs,
-        interval=1000 // fps,
-        blit=False,
-    )
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
 
-    writer = animation.PillowWriter(fps=fps)
-    ani.save(str(out_path), writer=writer)
-    plt.close(fig)
+
+def analyze(
+    snapshots: SnapshotCollection,
+    run_dir: Path,
+    test_loader: DataLoader,
+    replay_modules: list[str],
+    num_epochs: int,
+    device: torch.device,
+) -> list[dict[str, dict[str, np.ndarray]]]:
+    print("\n── SnapshotCollection ──")
+    print(f"  Available epochs : {snapshots.epochs}")
+    print(f"  Captured layers  : {len(snapshots.layers)} tensors")
+    print(f"  Total snapshots  : {len(snapshots)}")
+    print(f"  by_epoch(0) keys : {list(snapshots.by_epoch(0).keys())}")
+    print(f"  by_layer('fc1.weight') epochs : {list(snapshots.by_layer('fc1.weight').keys())}")
+
+    arrays = snapshots.to_numpy(epoch=0, layers=["fc1.weight"])
+    print(f"  to_numpy(epoch=0, layers=['fc1.weight']) shape : {arrays['fc1.weight'].shape}")
+
+    restored = TinyMLP().to(device)
+    restored.load_state_dict(snapshots.to_state_dict(epoch=0), strict=False)
+    print(f"  to_state_dict(epoch=0) → model restored (strict=False)")
+
+    print("\n── ReplaySession ──")
+    replay_history: list[dict[str, dict[str, np.ndarray]]] = []
+    final_replay = None
+
+    for epoch in range(num_epochs):
+        final_replay = ReplaySession(
+            run=run_dir,
+            checkpoint=epoch,
+            model_factory=TinyMLP,
+            dataloader=test_loader,
+            modules=replay_modules,
+            capture=["activations", "gradients", "logits"],
+            activation_reduction="pool",
+            gradient_mode="aggregated",
+        ).run()
+        replay_history.append({
+            "activations": final_replay.activations.to_numpy(),
+            "gradients":   final_replay.gradients.to_numpy(),
+        })
+
+    print(f"  Samples replayed : {final_replay.metadata.n_samples}")
+    print(f"  Logits shape     : {final_replay.logits.shape}")
+    for name in replay_modules:
+        print(f"  {name:6s} — activations {tuple(final_replay.activations[name].shape)}"
+              f"  gradients {tuple(final_replay.gradients[name].shape)}")
+
+    return replay_history
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    torch.manual_seed(0)
+    cfg_path = Path(__file__).parent / "configs" / "basic_usage.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
 
-    # --- toy dataset: binary classification ---
-    X = torch.randn(128, 4)
-    y = (X.sum(dim=1, keepdim=True) > 0).float()
-
-    model = TinyMLP()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-    loss_fn = nn.BCEWithLogitsLoss()
-
-    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "network_weights" / timestamp
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Writing snapshots to: {log_dir}/")
-
-    observer = NeuroInquisitor(
-        model,
-        log_dir=log_dir,
-        compress=True,
-        create_new=True,
+    torch.manual_seed(42)
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
     )
 
-    num_epochs = 30
-    for epoch in range(num_epochs):
-        optimizer.zero_grad()
-        loss = loss_fn(model(X), y)
-        loss.backward()
-        optimizer.step()
+    run_name = petname.generate(words=2, separator="-")
+    run_dir  = Path(__file__).parent.parent / "outputs" / "basic_usage" / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-        lr = optimizer.param_groups[0]["lr"]
-        observer.snapshot(epoch=epoch, metadata={"loss": loss.item(), "lr": lr})
-        print(f"  epoch {epoch:2d}  loss={loss.item():.4f}")
+    print(f"Run name : {run_name}")
+    print(f"Run dir  : {run_dir}/")
+    print(f"Device   : {device}\n")
 
-    observer.close()
-    print(f"\nDone. {num_epochs} snapshots written.")
+    num_epochs     = cfg["num_epochs"]
+    replay_modules = cfg["replay_modules"]
+    lr             = cfg["lr"]
 
-    # --- load all snapshots for visualisation ---
-    col = NeuroInquisitor.load(log_dir)
-    weight_history = [col.by_epoch(e) for e in range(num_epochs)]
+    train_loader, test_loader = load_data(
+        device,
+        cfg["train_batch_size"],
+        cfg["test_batch_size"],
+        cfg["n_samples"],
+        cfg["n_train"],
+    )
 
-    # --- generate GIF ---
-    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    out_dir = Path(__file__).parent.parent / "outputs" / "weight_heatmaps"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    gif_path = out_dir / f"{timestamp}_weights_over_time.gif"
+    model     = TinyMLP().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    loss_fn   = nn.BCEWithLogitsLoss()
 
-    print(f"\nGenerating GIF → {gif_path} ...")
-    _make_gif(weight_history, gif_path, fps=4)
-    print("Done.")
+    policy = CapturePolicy(
+        capture_parameters=True,
+        capture_buffers=True,
+        capture_optimizer=True,
+        replay_activations=True,
+        replay_gradients=True,
+    )
+    run_meta = RunMetadata(
+        training_config={"batch_size": cfg["train_batch_size"], "lr": lr},
+        optimizer_class="Adam",
+        device=str(device),
+        model_class="TinyMLP",
+    )
+    observer = NeuroInquisitor(
+        model,
+        log_dir=run_dir,
+        compress=True,
+        create_new=True,
+        capture_policy=policy,
+        run_metadata=run_meta,
+    )
+
+    train_losses, test_losses = train(
+        model, optimizer, loss_fn,
+        train_loader, test_loader, observer,
+        device, num_epochs,
+    )
+
+    snapshots      = NeuroInquisitor.load(run_dir)
+    replay_history = analyze(snapshots, run_dir, test_loader, replay_modules, num_epochs, device)
+    weight_history = [snapshots.by_epoch(e) for e in range(num_epochs)]
+
+    generate_visualizations(
+        weight_history, replay_history, replay_modules,
+        train_losses, test_losses, run_dir,
+    )
+    print(f"\nAll outputs in: {run_dir}/")
 
 
 if __name__ == "__main__":

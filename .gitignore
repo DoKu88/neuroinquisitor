@@ -47,3 +47,6 @@ Thumbs.db
 # Generated outputs (GIFs, plots, etc.) — keep the folder, ignore its contents
 outputs/*
 !outputs/.gitkeep
+
+# Claude Code worktrees
+.claude/worktrees/

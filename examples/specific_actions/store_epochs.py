@@ -11,6 +11,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import yaml
 
 from neuroinquisitor import NeuroInquisitor
 
@@ -26,16 +27,20 @@ class TinyMLP(nn.Module):
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent.parent / "configs" / "specific_actions_store_epochs.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(0)
-    X = torch.randn(64, 4)
+    X = torch.randn(cfg["n_samples"], 4)
     y = (X.sum(1, keepdim=True) > 0).float()
 
     model = TinyMLP()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    optimizer = torch.optim.SGD(model.parameters(), lr=cfg["lr"])
     loss_fn = nn.BCEWithLogitsLoss()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "store_epochs" / timestamp
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "store_epochs" / timestamp
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 
@@ -47,7 +52,7 @@ def main() -> None:
         create_new=True,
     )
 
-    for epoch in range(5):
+    for epoch in range(cfg["num_epochs"]):
         optimizer.zero_grad()
         loss = loss_fn(model(X), y)
         loss.backward()
@@ -65,10 +70,9 @@ def main() -> None:
     saved = sorted(log_dir.iterdir())
     print(f"\nfiles in log_dir: {[f.name for f in saved]}")
 
-    # metadata is stored in the index, not loaded from the .h5 file
     col = NeuroInquisitor.load(log_dir)
-    for entry in col._index.all():
-        print(f"  epoch {entry.epoch}  metadata={entry.metadata}")
+    print(f"epochs recorded : {col.epochs}")
+    print(f"layers tracked  : {col.layers}")
 
 
 if __name__ == "__main__":

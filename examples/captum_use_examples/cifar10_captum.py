@@ -1,22 +1,31 @@
-"""CIFAR-10 classification — full NeuroInquisitor feature showcase.
+"""CIFAR-10 + Captum integration with NeuroInquisitor.
 
-Demonstrates every implemented capability:
-  • CapturePolicy  — capture parameters, buffers, and optimizer state
-  • RunMetadata    — attach training provenance to the run
-  • Snapshots      — weight + buffer checkpoints with per-epoch metadata
-  • SnapshotCollection — by_epoch, by_layer, select, to_state_dict, to_numpy
-  • ReplaySession  — activations, gradients, and logits via forward/backward hooks
-  • Visualization  — weight-evolution video, replay figure, and loss curves
+Demonstrates NeuroInquisitor's out-of-the-box compatibility with Captum
+via two integration paths:
+
+  Path A  col.to_state_dict(epoch) → model.load_state_dict() → Captum
+  Path B  ReplaySession.run() → result.activations (plain tensors) → Captum
+
+Attribution methods shown:
+  1. IntegratedGradients — per-pixel input attribution.
+  2. LayerGradCam — spatial importance map on conv2.
+
+Outputs (in outputs/CIFAR10_Captum/<run-name>/):
+  attribution_evolution.mp4  — IG + GradCAM animated across training epochs.
+  final_attributions.png     — per-class attribution panel at the final epoch.
+  replay_activations.txt     — activation shapes captured via ReplaySession.
+  loss_curves.png            — train/test loss + accuracy.
 
 Run:
-    python examples/cifar10_example.py
+    python examples/captum_use_examples/cifar10_captum.py
 
 Requires:
-    pip install tqdm petname torchvision matplotlib
+    pip install tqdm petname torchvision matplotlib captum
 """
 
 from __future__ import annotations
 
+import torch.utils.data
 from pathlib import Path
 
 import numpy as np
@@ -33,10 +42,17 @@ from neuroinquisitor import (
     CapturePolicy,
     NeuroInquisitor,
     ReplaySession,
-    RunMetadata,
     SnapshotCollection,
 )
-from cifar10_example_utils import generate_visualizations
+
+from cifar10_captum_utils import (
+    compute_attributions_per_epoch,
+    generate_captum_visualizations,
+)
+
+_cfg = yaml.safe_load(
+    (Path(__file__).parent.parent / "configs" / "captum_use_examples_cifar10_captum.yaml").read_text()
+)
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +74,6 @@ class CIFAR10Net(nn.Module):
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(128)
-        # 32 → 16 → 8 → 4 (three max-pool ops)
         self.fc1 = nn.Linear(128 * 4 * 4, 256)
         self.fc2 = nn.Linear(256, 10)
 
@@ -76,12 +91,29 @@ class CIFAR10Net(nn.Module):
 # ---------------------------------------------------------------------------
 
 
+def _one_per_class(
+    dataset: torch.utils.data.Dataset,
+    n_classes: int = 10,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the first occurrence of each class as (images, labels)."""
+    images, labels = [], []
+    seen: set[int] = set()
+    for img, label in dataset:
+        if label not in seen:
+            seen.add(label)
+            images.append(img)
+            labels.append(label)
+        if len(seen) == n_classes:
+            break
+    imgs_t = torch.stack(images)
+    order = torch.tensor(labels).argsort()
+    return imgs_t[order], torch.tensor(labels)[order]
+
+
 def load_data(
     data_dir: Path,
     device: torch.device,
-    train_batch_size: int,
-    test_batch_size: int,
-) -> tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader, torch.Tensor, torch.Tensor]:
     transform_train = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(32, padding=4),
@@ -97,9 +129,12 @@ def load_data(
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=train_batch_size, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(test_ds,  batch_size=test_batch_size,  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
-    return train_loader, test_loader
+    train_loader = DataLoader(train_ds, batch_size=_cfg["train_batch_size"], shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=_cfg["test_batch_size"],  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+
+    # Fixed attribution batch: one normalised image per class, always kept on CPU.
+    attr_images, attr_labels = _one_per_class(test_ds)
+    return train_loader, test_loader, attr_images, attr_labels
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +162,7 @@ def train(
         running_loss = 0.0
 
         with tqdm(train_loader, desc=f"Epoch {epoch + 1:02d}/{num_epochs}", unit="batch", leave=True) as pbar:
-            for step, (images, labels) in enumerate(pbar):
+            for images, labels in pbar:
                 images, labels = images.to(device), labels.to(device)
                 optimizer.zero_grad()
                 loss = loss_fn(model(images), labels)
@@ -161,7 +196,6 @@ def train(
 
         observer.snapshot(
             epoch=epoch,
-            step=step,
             metadata={"loss": avg_train_loss, "test_loss": avg_test_loss, "accuracy": acc},
         )
 
@@ -178,54 +212,65 @@ def train(
 def analyze(
     snapshots: SnapshotCollection,
     run_dir: Path,
-    test_loader: DataLoader,
-    replay_modules: list[str],
+    attr_images: torch.Tensor,
+    attr_labels: torch.Tensor,
     num_epochs: int,
-    device: torch.device,
-) -> list[dict[str, dict[str, np.ndarray]]]:
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     print("\n── SnapshotCollection ──")
     print(f"  Available epochs : {snapshots.epochs}")
     print(f"  Captured layers  : {len(snapshots.layers)} tensors")
     print(f"  Total snapshots  : {len(snapshots)}")
-    print(f"  by_epoch(0) keys : {list(snapshots.by_epoch(0).keys())[:4]} …")
-    print(f"  by_layer('conv1.weight') epochs : {list(snapshots.by_layer('conv1.weight').keys())}")
 
-    arrays = snapshots.to_numpy(epoch=0, layers=["conv1.weight"])
-    print(f"  to_numpy(epoch=0, layers=['conv1.weight']) shape : {arrays['conv1.weight'].shape}")
+    print("\n── Path A  col.to_state_dict() → Captum ──")
+    print("  Each NI checkpoint: load weights into fresh model → IntegratedGradients + LayerGradCam")
+    ig_mag_grids, gc_grids, ig_signed_grids = compute_attributions_per_epoch(
+        snapshots, CIFAR10Net, attr_images, attr_labels, n_steps=_cfg["ig_n_steps"],
+    )
+    print(f"  Attributions computed for {len(snapshots.epochs)} epoch(s).")
 
-    restored = CIFAR10Net().to(device)
-    restored.load_state_dict(snapshots.to_state_dict(epoch=0), strict=False)
-    print(f"  to_state_dict(epoch=0) → model restored (strict=False)")
+    print("\n── Path B  ReplaySession → plain tensors → Captum ──")
+    final_epoch = num_epochs - 1
+    attr_loader = DataLoader(
+        torch.utils.data.TensorDataset(attr_images, attr_labels),
+        batch_size=len(attr_images),
+        shuffle=False,
+        num_workers=2,
+        persistent_workers=True,
+    )
+    result = ReplaySession(
+        run=run_dir,
+        checkpoint=final_epoch,
+        model_factory=CIFAR10Net,
+        dataloader=attr_loader,
+        modules=["conv2", "fc1"],
+        capture=["activations"],
+    ).run()
 
-    print("\n── ReplaySession ──")
-    replay_history: list[dict[str, dict[str, np.ndarray]]] = []
-    final_replay = None
+    print(f"  Samples replayed : {result.metadata.n_samples}")
+    for name, tensor in result.activations.items():
+        assert type(tensor) is torch.Tensor, (
+            f"Activation {name!r} is {type(tensor).__name__}; expected torch.Tensor"
+        )
+        print(f"  {name:12s}  shape={tuple(tensor.shape)}  dtype={tensor.dtype}")
+    print("  All activation values are plain torch.Tensor — Captum accepts them directly.")
 
-    for epoch in tqdm(range(num_epochs), desc="  Replaying checkpoints", unit="ckpt", leave=True):
-        final_replay = ReplaySession(
-            run=run_dir,
-            checkpoint=epoch,
-            model_factory=CIFAR10Net,
-            dataloader=test_loader,
-            modules=replay_modules,
-            capture=["activations", "gradients", "logits"],
-            activation_reduction="pool",
-            gradient_mode="aggregated",
-            dataset_slice=lambda samples: samples[:128],
-            slice_metadata={"description": "first 128 test samples"},
-        ).run()
-        replay_history.append({
-            "activations": final_replay.activations.to_numpy(),
-            "gradients":   final_replay.gradients.to_numpy(),
-        })
+    replay_path = run_dir / "replay_activations.txt"
+    lines = [
+        f"ReplaySession — epoch {final_epoch} activations",
+        f"  n_samples : {result.metadata.n_samples}",
+        "",
+        *(
+            f"  {name:12s}  shape={tuple(tensor.shape)}  dtype={tensor.dtype}"
+            for name, tensor in result.activations.items()
+        ),
+        "",
+        "All activation values are plain torch.Tensor — Captum accepts them directly.",
+        "Example: feed conv2 activations into IntegratedGradients as additional_forward_args.",
+    ]
+    replay_path.write_text("\n".join(lines))
+    print(f"  Replay log saved : {replay_path.name}")
 
-    print(f"  Samples replayed : {final_replay.metadata.n_samples}")
-    print(f"  Logits shape     : {final_replay.logits.shape}")
-    for name in replay_modules:
-        print(f"  {name:6s} — activations {tuple(final_replay.activations[name].shape)}"
-              f"  gradients {tuple(final_replay.gradients[name].shape)}")
-
-    return replay_history
+    return ig_mag_grids, gc_grids, ig_signed_grids
 
 
 # ---------------------------------------------------------------------------
@@ -234,79 +279,60 @@ def analyze(
 
 
 def main() -> None:
-    cfg_path = Path(__file__).parent / "configs" / "cifar10_example.yaml"
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-
     torch.manual_seed(42)
-    device = torch.device(
+    # Captum gradient-based methods are most reliable on CPU.
+    # Training uses the fastest available device; attribution always runs on CPU.
+    train_device = torch.device(
         "cuda" if torch.cuda.is_available()
         else "mps" if torch.backends.mps.is_available()
         else "cpu"
     )
 
     run_name = petname.generate(words=2, separator="-")
-    run_dir  = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / run_name
-    data_dir = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / "data"
+    run_dir  = Path(__file__).parent.parent.parent / "outputs" / "CIFAR10_Captum" / run_name
+    data_dir = Path(__file__).parent.parent.parent / "outputs" / "CIFAR10_Captum" / "data"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Run name : {run_name}")
-    print(f"Run dir  : {run_dir}/")
-    print(f"Device   : {device}\n")
+    print(f"Run name      : {run_name}")
+    print(f"Run dir       : {run_dir}/")
+    print(f"Train device  : {train_device}")
+    print(f"Captum device : cpu\n")
 
-    num_epochs     = cfg["num_epochs"]
-    replay_modules = cfg["replay_modules"]
-    lr             = cfg["lr"]
-    weight_decay   = cfg["weight_decay"]
-    T_max          = cfg["T_max"]
+    num_epochs = _cfg["num_epochs"]
 
-    train_loader, test_loader = load_data(
-        data_dir, device, cfg["train_batch_size"], cfg["test_batch_size"]
-    )
+    train_loader, test_loader, attr_images, attr_labels = load_data(data_dir, train_device)
 
-    model     = CIFAR10Net().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
+    model     = CIFAR10Net().to(train_device)
+    optimizer = optim.Adam(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=_cfg["T_max"])
     loss_fn   = nn.CrossEntropyLoss()
 
-    policy = CapturePolicy(
-        capture_parameters=True,
-        capture_buffers=True,
-        capture_optimizer=True,
-        replay_activations=True,
-        replay_gradients=True,
-    )
-    run_meta = RunMetadata(
-        training_config={
-            "batch_size": cfg["train_batch_size"], "lr": lr,
-            "weight_decay": weight_decay, "T_max": T_max,
-        },
-        optimizer_class="Adam",
-        device=str(device),
-        model_class="CIFAR10Net",
-    )
+    # capture_buffers=True includes BatchNorm running stats so to_state_dict()
+    # produces a complete state dict loadable with strict=True.
     observer = NeuroInquisitor(
         model,
         log_dir=run_dir,
         compress=True,
         create_new=True,
-        capture_policy=policy,
-        run_metadata=run_meta,
+        capture_policy=CapturePolicy(capture_buffers=True),
     )
 
     train_losses, test_losses, accuracy_history = train(
         model, optimizer, scheduler, loss_fn,
         train_loader, test_loader, observer,
-        device, num_epochs,
+        train_device, num_epochs,
     )
 
-    snapshots      = NeuroInquisitor.load(run_dir)
-    replay_history = analyze(snapshots, run_dir, test_loader, replay_modules, num_epochs, device)
-    weight_history = [snapshots.by_epoch(e) for e in range(num_epochs)]
+    snapshots = NeuroInquisitor.load(run_dir)
+    ig_mag_grids, gc_grids, ig_signed_grids = analyze(
+        snapshots, run_dir, attr_images, attr_labels, num_epochs,
+    )
 
-    generate_visualizations(
-        weight_history, replay_history, replay_modules,
-        accuracy_history, train_losses, test_losses, run_dir,
+    generate_captum_visualizations(
+        snapshots, CIFAR10Net, attr_images, attr_labels,
+        ig_mag_grids, gc_grids, ig_signed_grids,
+        accuracy_history, train_losses, test_losses,
+        run_dir,
     )
     print(f"\nAll outputs in: {run_dir}/")
 

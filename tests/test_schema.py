@@ -12,7 +12,6 @@ import torch.nn as nn
 from neuroinquisitor import CapturePolicy, NeuroInquisitor, RunManifest, RunMetadata
 from neuroinquisitor.schema import (
     SCHEMA_VERSION,
-    DerivedArtifactRef,
     LayerMetadata,
     SnapshotRef,
 )
@@ -91,17 +90,6 @@ def test_layer_metadata_rejects_unknown_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DerivedArtifactRef round-trip
-# ---------------------------------------------------------------------------
-
-
-def test_derived_artifact_ref_round_trip() -> None:
-    ref = DerivedArtifactRef(key="run1/spectrum", kind="table", analyzer="spectrum_rank")
-    restored = DerivedArtifactRef.model_validate(ref.model_dump())
-    assert restored == ref
-
-
-# ---------------------------------------------------------------------------
 # SnapshotRef round-trip
 # ---------------------------------------------------------------------------
 
@@ -126,7 +114,6 @@ def test_snapshot_ref_defaults() -> None:
     assert ref.buffers == []
     assert ref.metadata == {}
     assert ref.capture_policy is None
-    assert ref.derived == []
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +125,6 @@ def test_run_manifest_defaults() -> None:
     m = RunManifest()
     assert m.schema_version == SCHEMA_VERSION
     assert m.snapshots == []
-    assert m.derived_artifacts == []
 
 
 def test_run_manifest_round_trip() -> None:

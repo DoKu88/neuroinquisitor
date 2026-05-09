@@ -1,0 +1,13 @@
+name: Append Run
+description: Demonstrates create_new=False append mode — two training sessions write to the same log_dir without disturbing existing snapshots.
+tags:
+  - specific-action
+  - append
+
+# data
+n_samples: 64
+
+# training
+num_epochs_session1: 5
+num_epochs_session2: 5
+lr: 0.05

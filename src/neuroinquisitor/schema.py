@@ -49,17 +49,6 @@ class LayerMetadata(BaseModel):
     kind: str
 
 
-class DerivedArtifactRef(BaseModel):
-    """Reference to a cached derived artifact produced by an analyzer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    key: str
-    kind: str
-    analyzer: str
-    created_at: str | None = None
-
-
 class SnapshotRef(BaseModel):
     """Schema-level representation of one snapshot entry in the manifest."""
 
@@ -72,7 +61,6 @@ class SnapshotRef(BaseModel):
     buffers: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     capture_policy: CapturePolicy | None = None
-    derived: list[DerivedArtifactRef] = Field(default_factory=list)
 
 
 class RunManifest(BaseModel):
@@ -84,6 +72,5 @@ class RunManifest(BaseModel):
     run_metadata: RunMetadata | None = None
     capture_policy: CapturePolicy | None = None
     snapshots: list[SnapshotRef] = Field(default_factory=list)
-    derived_artifacts: list[DerivedArtifactRef] = Field(default_factory=list)
 
 

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 
 from neuroinquisitor.backends.base import Backend
 from neuroinquisitor.formats.base import Format
@@ -16,10 +17,11 @@ if TYPE_CHECKING:
 
 
 class SnapshotCollection:
-    """A lazy, filterable view over snapshots stored by a :class:`~neuroinquisitor.core.NeuroInquisitor`.
+    """A lazy, filterable view over snapshots stored by a NeuroInquisitor.
 
-    Obtain an instance via :meth:`~neuroinquisitor.core.NeuroInquisitor.load_all_snapshots`
-    or :meth:`~neuroinquisitor.core.NeuroInquisitor.load`.
+    Obtain an instance via
+    :meth:`~neuroinquisitor.core.NeuroInquisitor.load_all_snapshots` or
+    :meth:`~neuroinquisitor.core.NeuroInquisitor.load`.
 
     No tensor data is read from disk until you call :meth:`by_epoch` or
     :meth:`by_layer`.  :meth:`select` composes filter sets and returns a
@@ -149,10 +151,71 @@ class SnapshotCollection:
             assert key is not None
             return key, tensor
 
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(entries) or 1)) as pool:
+        n_workers = min(max_workers, len(entries) or 1)
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
             results = list(pool.map(_read_one, entries))
 
         return dict(results)
+
+    # ------------------------------------------------------------------
+    # Standard export — no NI wrapper types in return values
+    # ------------------------------------------------------------------
+
+    def to_state_dict(self, epoch: int) -> dict[str, torch.Tensor]:
+        """Return a standard PyTorch state dict for *epoch*.
+
+        The returned dict is loadable directly with ``model.load_state_dict()``.
+        Includes both parameters and any buffers (e.g. BatchNorm running stats)
+        that were captured at snapshot time.  No NI types appear in the return
+        value.
+
+        Parameters
+        ----------
+        epoch:
+            Epoch index to load.
+        """
+        if self._epoch_filter is not None and epoch not in self._epoch_filter:
+            raise KeyError(
+                f"Epoch {epoch} is excluded by the current selection. "
+                f"Available: {self.epochs}"
+            )
+        entry = self._index.get_by_epoch(epoch)
+        if entry is None:
+            raise KeyError(
+                f"No snapshot for epoch {epoch}. Available: {self.epochs}"
+            )
+        path = self._backend.read_path(entry.file_key)
+        arrays: dict[str, np.ndarray] = self._format.read(path, layers=self._layer_filter)
+
+        if entry.buffers:
+            buf_names = (
+                set(entry.buffers) & self._layer_filter
+                if self._layer_filter is not None
+                else None
+            )
+            arrays = {**arrays, **self._format.read_buffers(path, names=buf_names)}
+
+        return {name: torch.from_numpy(arr.copy()) for name, arr in arrays.items()}
+
+    def to_numpy(
+        self,
+        epoch: int,
+        layers: list[str] | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Return parameter tensors as plain NumPy arrays for *epoch*.
+
+        No NI types appear in the return value.
+
+        Parameters
+        ----------
+        epoch:
+            Epoch index to load.
+        layers:
+            Optional list of layer names to include.  ``None`` returns all
+            layers (subject to the collection's existing filter).
+        """
+        col = self.select(layers=layers) if layers is not None else self
+        return col.by_epoch(epoch)
 
     # ------------------------------------------------------------------
     # Filter composition — zero I/O
@@ -163,7 +226,7 @@ class SnapshotCollection:
         epochs: int | list[int] | range | None = None,
         layers: str | list[str] | None = None,
     ) -> SnapshotCollection:
-        """Return a new :class:`SnapshotCollection` narrowed to *epochs* and/or *layers*.
+        """Narrow to *epochs* and/or *layers*; return a new :class:`SnapshotCollection`.
 
         Composes with existing filters — calling ``select`` twice is safe
         and equivalent to calling it once with the intersection.  No files
@@ -185,9 +248,13 @@ class SnapshotCollection:
 
         new_layer_filter = self._layer_filter
         if layers is not None:
-            incoming_l: set[str] = {layers} if isinstance(layers, str) else set(layers)
+            incoming_l: set[str] = (
+                {layers} if isinstance(layers, str) else set(layers)
+            )
             new_layer_filter = (
-                incoming_l if new_layer_filter is None else new_layer_filter & incoming_l
+                incoming_l
+                if new_layer_filter is None
+                else new_layer_filter & incoming_l
             )
 
         return SnapshotCollection(

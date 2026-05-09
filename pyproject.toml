@@ -26,6 +26,10 @@ dev = [
 examples = [
     "matplotlib>=3.7",
 ]
+parquet = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -41,6 +45,13 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict = true
 
+[tool.coverage.run]
+omit = [
+    # compat tests only execute when optional packages are installed;
+    # excluding them prevents spurious coverage drops in CI
+    "tests/compat/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=neuroinquisitor --cov-fail-under=90"
+addopts = "--cov=neuroinquisitor --cov-fail-under=90 -rs"

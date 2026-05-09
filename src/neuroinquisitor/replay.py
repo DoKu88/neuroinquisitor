@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import warnings
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Literal
 
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pydantic import BaseModel, ConfigDict, Field
 
 from neuroinquisitor.backends.base import Backend
@@ -73,6 +77,30 @@ class ReplayMetadata(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# TensorMap — transparent dict[str, Tensor] with numpy conversion
+# ---------------------------------------------------------------------------
+
+
+class TensorMap(dict):  # type: ignore[type-arg]
+    """A ``dict[str, torch.Tensor]`` with a :meth:`to_numpy` convenience method.
+
+    Behaves exactly like a plain :class:`dict` — all dict operations work and
+    ``isinstance(tm, dict)`` is ``True``.  The extra method converts every value
+    to a plain NumPy array without wrapping the tensors in any NI-specific type.
+
+    Typical usage::
+
+        result = session.run()
+        act_np   = result.activations.to_numpy()   # dict[str, np.ndarray]
+        grad_np  = result.gradients.to_numpy()     # dict[str, np.ndarray]
+    """
+
+    def to_numpy(self) -> dict[str, np.ndarray]:
+        """Return a plain ``dict[str, np.ndarray]`` — no NI types in the output."""
+        return {k: v.detach().cpu().numpy() for k, v in self.items()}
+
+
+# ---------------------------------------------------------------------------
 # Replay result
 # ---------------------------------------------------------------------------
 
@@ -81,15 +109,19 @@ class ReplayMetadata(BaseModel):
 class ReplayResult:
     """Output of :meth:`ReplaySession.run`.
 
-    ``activations`` and ``gradients`` are ``dict[str, torch.Tensor]`` keyed
-    by module name, shaped according to the configured ``activation_reduction``
-    and ``gradient_mode`` respectively.  ``logits`` is the concatenated model
-    output across all batches.  ``metadata`` carries provenance information
-    for the replay.
+    ``activations`` and ``gradients`` are :class:`TensorMap` objects (a
+    transparent ``dict[str, torch.Tensor]`` subclass) keyed by module name.
+    Call ``.to_numpy()`` on either to get plain NumPy arrays::
+
+        result.activations.to_numpy()   # dict[str, np.ndarray]
+        result.gradients.to_numpy()     # dict[str, np.ndarray]
+
+    ``logits`` is the concatenated model output across all batches.
+    ``metadata`` carries provenance information for the replay.
     """
 
-    activations: dict[str, torch.Tensor] = field(default_factory=dict)
-    gradients: dict[str, torch.Tensor] = field(default_factory=dict)
+    activations: TensorMap = field(default_factory=TensorMap)
+    gradients: TensorMap = field(default_factory=TensorMap)
     logits: torch.Tensor | None = None
     metadata: ReplayMetadata | None = None
 
@@ -267,7 +299,7 @@ class ReplaySession:
         for batch in self._dataloader:
             if isinstance(batch, torch.Tensor):
                 batches.append((batch,))
-            elif isinstance(batch, (list, tuple)):
+            elif isinstance(batch, list | tuple):
                 batches.append(
                     tuple(b for b in batch if isinstance(b, torch.Tensor))
                 )
@@ -296,8 +328,8 @@ class ReplaySession:
         model: nn.Module,
         batches: list[tuple[torch.Tensor, ...]],
     ) -> tuple[
-        dict[str, torch.Tensor],
-        dict[str, torch.Tensor],
+        TensorMap,
+        TensorMap,
         torch.Tensor | None,
     ]:
         do_act = "activations" in self.config.capture
@@ -330,10 +362,17 @@ class ReplaySession:
                         module.register_full_backward_hook(_GradHook(grad_buf, name))
                     )
 
+            labels = batch[1] if len(batch) > 1 else None
+
             try:
                 if do_grad:
                     logits = model(inputs)
-                    logits.sum().backward()
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", "Full backward hook", UserWarning)
+                        if labels is not None and logits.ndim == 2:
+                            F.cross_entropy(logits, labels).backward()
+                        else:
+                            logits.sum().backward()
                     model.zero_grad()
                 else:
                     with torch.no_grad():
@@ -351,16 +390,16 @@ class ReplaySession:
             if do_logits:
                 all_logits.append(logits.detach())
 
-        final_activations: dict[str, torch.Tensor] = {
-            m: self._reduce_activation(torch.cat(ts, dim=0))
+        final_activations = TensorMap(
+            (m, self._reduce_activation(torch.cat(ts, dim=0)))
             for m, ts in all_activations.items()
             if ts
-        }
-        final_gradients: dict[str, torch.Tensor] = {
-            m: self._reduce_gradient(torch.cat(ts, dim=0))
+        )
+        final_gradients = TensorMap(
+            (m, self._reduce_gradient(torch.cat(ts, dim=0)))
             for m, ts in all_gradients.items()
             if ts
-        }
+        )
         final_logits: torch.Tensor | None = (
             torch.cat(all_logits, dim=0) if all_logits else None
         )

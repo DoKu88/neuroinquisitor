@@ -1,0 +1,13 @@
+name: Load and Filter
+description: All SnapshotCollection access patterns — NeuroInquisitor.load(), load with epoch/layer filters, by_epoch(), by_layer(), and select().
+tags:
+  - specific-action
+  - loading
+  - filtering
+
+# data
+n_samples: 64
+
+# training
+num_epochs: 10
+lr: 0.05

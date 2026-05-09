@@ -11,6 +11,7 @@ from neuroinquisitor.replay import (
     ReplayMetadata,
     ReplayResult,
     ReplaySession,
+    TensorMap,
 )
 from neuroinquisitor.schema import CapturePolicy, RunManifest, RunMetadata
 
@@ -33,5 +34,6 @@ __all__ = [
     "ReplayResult",
     "ReplayMetadata",
     "CheckpointSelector",
+    "TensorMap",
     "__version__",
 ]

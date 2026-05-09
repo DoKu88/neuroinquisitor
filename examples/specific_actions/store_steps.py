@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import yaml
 
 from neuroinquisitor import NeuroInquisitor
 
@@ -30,29 +31,33 @@ class TinyMLP(nn.Module):
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent.parent / "configs" / "specific_actions_store_steps.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(0)
-    dataset = torch.randn(128, 4)
+    dataset = torch.randn(cfg["n_samples"], 4)
     labels = (dataset.sum(1, keepdim=True) > 0).float()
 
     model = TinyMLP()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    optimizer = torch.optim.SGD(model.parameters(), lr=cfg["lr"])
     loss_fn = nn.BCEWithLogitsLoss()
 
-    batch_size = 32
+    batch_size = cfg["batch_size"]
     batches = [
         (dataset[i : i + batch_size], labels[i : i + batch_size])
         for i in range(0, len(dataset), batch_size)
     ]
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "store_steps" / timestamp
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "store_steps" / timestamp
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 
     observer = NeuroInquisitor(model, log_dir=log_dir)
 
     global_step = 0
-    for epoch in range(2):
+    for epoch in range(cfg["num_outer_epochs"]):
         for X, y in batches:
             optimizer.zero_grad()
             loss = loss_fn(model(X), y)
@@ -74,9 +79,7 @@ def main() -> None:
     print(f"\ntotal snapshots: {len(col)}")
     # step-only snapshots have no epoch, so col.epochs is empty
     print(f"epochs in index: {col.epochs}")
-    # access a specific snapshot via the raw index
-    entry = col._index.all()[3]
-    print(f"snapshot #3 — step={entry.step}  layers={entry.layers}")
+    print(f"layers tracked : {col.layers}")
 
 
 if __name__ == "__main__":
