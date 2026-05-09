@@ -45,7 +45,7 @@ def main() -> None:
     ]
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "store_steps" / timestamp
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "store_steps" / timestamp
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 

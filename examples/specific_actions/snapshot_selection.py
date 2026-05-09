@@ -7,7 +7,7 @@ Trains a TinyMLP for 40 epochs, then shows five selections:
   4. fc1.weight only, all epochs
   5. Late training + fc1.weight  (combined select)
 
-Each selection is saved as a timestamped GIF under outputs/snapshot_selection/.
+Each selection is saved as a timestamped GIF under ../../outputs/snapshot_selection/.
 
 _make_gif pre-fetches all needed tensors upfront via col.by_layer() — which
 reads each layer across all epochs in parallel — then renders frames from an
@@ -137,7 +137,7 @@ def main() -> None:
     loss_fn = nn.BCEWithLogitsLoss()
 
     ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "network_weights" / ts
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "network_weights" / ts
     log_dir.mkdir(parents=True, exist_ok=True)
 
     print("Training TinyMLP for 40 epochs …")
@@ -163,7 +163,7 @@ def main() -> None:
     col = NeuroInquisitor.load(log_dir, format="hdf5")
     print(f"SnapshotCollection: {col}\n")
 
-    out_dir = Path(__file__).parent.parent / "outputs" / "snapshot_selection"
+    out_dir = Path(__file__).parent.parent.parent / "outputs" / "snapshot_selection"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     all_layers = ["fc1.weight", "fc2.weight"]

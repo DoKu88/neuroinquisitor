@@ -56,7 +56,7 @@ def _train_and_save(log_dir: Path) -> None:
 
 def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(__file__).parent.parent / "outputs" / "replay_logits" / timestamp
+    log_dir = Path(__file__).parent.parent.parent / "outputs" / "replay_logits" / timestamp
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 
