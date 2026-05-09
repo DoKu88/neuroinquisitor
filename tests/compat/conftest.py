@@ -27,6 +27,8 @@ _COMPAT_PACKAGES: dict[str, str] = {
     "captum": "pip install captum",
     "torchlens": "pip install torchlens",
     "transformer_lens": "pip install transformer-lens",
+    "tensorboard": "pip install tensorboard",
+    "fiftyone": "pip install fiftyone",
 }
 
 
