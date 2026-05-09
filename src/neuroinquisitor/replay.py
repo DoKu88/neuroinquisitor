@@ -12,6 +12,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pydantic import BaseModel, ConfigDict, Field
 
 from neuroinquisitor.backends.base import Backend
@@ -361,12 +362,17 @@ class ReplaySession:
                         module.register_full_backward_hook(_GradHook(grad_buf, name))
                     )
 
+            labels = batch[1] if len(batch) > 1 else None
+
             try:
                 if do_grad:
                     logits = model(inputs)
                     with warnings.catch_warnings():
                         warnings.filterwarnings("ignore", "Full backward hook", UserWarning)
-                        logits.sum().backward()
+                        if labels is not None and logits.ndim == 2:
+                            F.cross_entropy(logits, labels).backward()
+                        else:
+                            logits.sum().backward()
                     model.zero_grad()
                 else:
                     with torch.no_grad():
