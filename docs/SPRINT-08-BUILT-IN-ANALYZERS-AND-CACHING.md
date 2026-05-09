@@ -19,9 +19,14 @@ df.plot()
 ## Tasks
 
 - [ ] `NI-GAMMA-001` Implement `trajectory_stats`.
-  - Inputs: `weights: dict[str, np.ndarray]` (keyed by layer, one array per epoch expected as a stack or via `SnapshotCollection.to_numpy`).
+  - Inputs: `weights: dict[int, np.ndarray]` — the direct output of `SnapshotCollection.by_layer(name)`, where keys are epoch indices and values are the parameter array at that epoch. Callers invoke it once per layer of interest.
+  - Typical call pattern:
+    ```python
+    layer_history = col.by_layer("fc1.weight")  # dict[int, np.ndarray]
+    df = trajectory_stats(layer_history)
+    ```
   - Computes: L2 distance from init, cosine similarity to init and final, update norm per step, velocity and acceleration summaries.
-  - Returns: `pd.DataFrame` with columns `layer`, `epoch`, and one column per metric.
+  - Returns: `pd.DataFrame` with columns `epoch`, and one column per metric. The caller already knows which layer they passed in; no `layer` column is needed unless the caller concatenates results from multiple `by_layer` calls.
 
 - [ ] `NI-GAMMA-002` Implement `spectrum_rank`.
   - Inputs: `weights: dict[str, np.ndarray]`.
@@ -29,7 +34,12 @@ df.plot()
   - Returns: `pd.DataFrame` with columns `layer`, `epoch`, and one column per metric.
 
 - [ ] `NI-GAMMA-003` Implement `projection_embed`.
-  - Inputs: `activations: dict[str, torch.Tensor]`, `method: str = "pca"`, `n_components: int = 2`.
+  - Inputs: `activations: dict[str, torch.Tensor]` — the direct output of `ReplayResult.activations` (a `TensorMap`, which is a plain `dict` subclass). No unwrapping needed; pass `result.activations` directly.
+  - Typical call pattern:
+    ```python
+    result = ReplaySession(...).run()
+    df = projection_embed(result.activations)
+    ```
   - Supports PCA by default; UMAP via optional extra (`pip install neuroinquisitor[umap]`), failing gracefully with a clear install hint if missing.
   - Returns: `pd.DataFrame` with columns `layer`, `sample_idx`, `component_0`, `component_1` (and optionally `component_2`).
 
