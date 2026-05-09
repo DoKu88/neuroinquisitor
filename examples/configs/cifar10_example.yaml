@@ -1,0 +1,11 @@
+name: CIFAR-10 Example
+description: Full NeuroInquisitor feature showcase on CIFAR-10 classification — CapturePolicy, RunMetadata, Snapshots, SnapshotCollection, ReplaySession, and Visualization.
+tags:
+  - full-showcase
+  - cifar10
+  - cnn
+dependencies:
+  - tqdm
+  - petname
+  - torchvision
+  - matplotlib

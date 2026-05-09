@@ -1,0 +1,6 @@
+name: Track Activations
+description: Captures intermediate module activations at a saved checkpoint using ReplaySession — raw, mean, and pooled reduction modes.
+tags:
+  - specific-action
+  - replay
+  - activations

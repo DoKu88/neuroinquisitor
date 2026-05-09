@@ -1,0 +1,6 @@
+name: Track Gradients
+description: Captures output gradients at a saved checkpoint using ReplaySession — per-example and aggregated gradient modes for sensitivity analysis.
+tags:
+  - specific-action
+  - replay
+  - gradients

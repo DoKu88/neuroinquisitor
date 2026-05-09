@@ -1,0 +1,6 @@
+name: Store Epochs
+description: Epoch-based snapshotting with per-epoch metadata and compression.
+tags:
+  - specific-action
+  - snapshotting
+  - epochs

@@ -1,0 +1,6 @@
+name: Store Steps
+description: Step-based snapshotting for intra-epoch granularity — snapshots keyed by step, epoch, or both.
+tags:
+  - specific-action
+  - snapshotting
+  - steps

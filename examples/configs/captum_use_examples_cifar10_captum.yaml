@@ -1,0 +1,13 @@
+name: Captum + CIFAR-10
+description: Captum attribution across training epochs — IntegratedGradients and LayerGradCam replayed over NeuroInquisitor checkpoints via col.to_state_dict() and ReplaySession.
+tags:
+  - integration
+  - captum
+  - cifar10
+  - cnn
+dependencies:
+  - tqdm
+  - petname
+  - torchvision
+  - matplotlib
+  - captum

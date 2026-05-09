@@ -1,0 +1,6 @@
+name: Replay Logits
+description: Captures raw model output (logits) at a saved checkpoint using ReplaySession with capture=["logits"].
+tags:
+  - specific-action
+  - replay
+  - logits

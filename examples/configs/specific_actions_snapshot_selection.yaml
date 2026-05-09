@@ -1,0 +1,8 @@
+name: Snapshot Selection
+description: Demonstrates SnapshotCollection selection patterns — all epochs, early/late splits, single-layer, and combined selects — with animated GIF output.
+tags:
+  - specific-action
+  - snapshot-selection
+  - visualization
+dependencies:
+  - matplotlib

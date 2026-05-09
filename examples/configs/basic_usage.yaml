@@ -1,0 +1,8 @@
+name: Basic Usage
+description: Full NeuroInquisitor feature showcase with a tiny MLP — CapturePolicy, RunMetadata, Snapshots, SnapshotCollection, ReplaySession, and Visualization.
+tags:
+  - full-showcase
+  - mlp
+dependencies:
+  - petname
+  - matplotlib
