@@ -1,14 +1,5 @@
 """neuroinquisitor — neural network weight observability for PyTorch."""
 
-from neuroinquisitor.analysis import (
-    AnalyzerRequest,
-    AnalyzerResult,
-    AnalyzerSpec,
-    get_analyzer,
-    list_analyzers,
-    register,
-)
-from neuroinquisitor.artifacts import PROVENANCE_COLUMNS, write_derived_table
 from neuroinquisitor.backends import Backend, LocalBackend
 from neuroinquisitor.collection import SnapshotCollection
 from neuroinquisitor.core import NeuroInquisitor
@@ -44,13 +35,5 @@ __all__ = [
     "ReplayMetadata",
     "CheckpointSelector",
     "TensorMap",
-    "AnalyzerRequest",
-    "AnalyzerResult",
-    "AnalyzerSpec",
-    "register",
-    "get_analyzer",
-    "list_analyzers",
-    "write_derived_table",
-    "PROVENANCE_COLUMNS",
     "__version__",
 ]
