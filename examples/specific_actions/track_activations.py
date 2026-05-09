@@ -66,7 +66,7 @@ def main() -> None:
     X_eval = torch.randn(16, 4)
     y_eval = torch.randint(0, 2, (16,))
     dataset = torch.utils.data.TensorDataset(X_eval, y_eval)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=False)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=False, persistent_workers=True)
 
     # -------------------------------------------------------------------
     # Capture activations at epoch 4 — raw mode (default)

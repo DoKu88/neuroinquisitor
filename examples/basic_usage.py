@@ -69,8 +69,8 @@ def load_data(device: torch.device) -> tuple[DataLoader, DataLoader]:
     X_test,  y_test  = X[n_train:], y[n_train:]
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=64,  shuffle=True,  pin_memory=pin)
-    test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=128, shuffle=False, pin_memory=pin)
+    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=64,  shuffle=True,  pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=128, shuffle=False, pin_memory=pin, persistent_workers=True)
     return train_loader, test_loader
 
 

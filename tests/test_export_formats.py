@@ -71,7 +71,7 @@ def mlp_dataloader() -> torch.utils.data.DataLoader[tuple[torch.Tensor, ...]]:
     ds: torch.utils.data.Dataset[tuple[torch.Tensor, torch.Tensor]] = (
         torch.utils.data.TensorDataset(X, y)
     )
-    return torch.utils.data.DataLoader(ds, batch_size=8, shuffle=False)
+    return torch.utils.data.DataLoader(ds, batch_size=8, shuffle=False, persistent_workers=True)
 
 
 # ---------------------------------------------------------------------------

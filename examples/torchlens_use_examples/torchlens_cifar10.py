@@ -128,13 +128,13 @@ def load_data(
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     pin          = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin)
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
 
     # Fixed probe batch: same images every epoch so TorchLens comparisons are
     # apples-to-apples across checkpoints.
     probe_images, probe_labels = next(iter(
-        DataLoader(test_ds, batch_size=PROBE_BATCH_SIZE, shuffle=False)
+        DataLoader(test_ds, batch_size=PROBE_BATCH_SIZE, shuffle=False, persistent_workers=True)
     ))
 
     return train_loader, test_loader, probe_images, probe_labels
