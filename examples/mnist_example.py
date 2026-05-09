@@ -1,7 +1,12 @@
-"""MNIST classification with weight tracking via NeuroInquisitor.
+"""MNIST classification — full NeuroInquisitor feature showcase.
 
-Trains a small CNN on MNIST, snapshots weights after each epoch,
-then generates a video showing the weight evolution over training.
+Demonstrates every implemented capability:
+  • CapturePolicy  — capture parameters, buffers, and optimizer state
+  • RunMetadata    — attach training provenance to the run
+  • Snapshots      — weight + buffer checkpoints with per-epoch metadata
+  • SnapshotCollection — by_epoch, by_layer, select, to_state_dict, to_numpy
+  • ReplaySession  — activations, gradients, and logits via forward/backward hooks
+  • Visualization  — weight-evolution video, replay figure, and loss curves
 
 Run:
     python examples/mnist_example.py
@@ -12,11 +17,8 @@ Requires:
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-import matplotlib.animation as animation
-import matplotlib.pyplot as plt
 import numpy as np
 import petname
 import torch
@@ -26,11 +28,20 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 
-from neuroinquisitor import NeuroInquisitor
+from neuroinquisitor import (
+    CapturePolicy,
+    NeuroInquisitor,
+    ReplaySession,
+    RunMetadata,
+    SnapshotCollection,
+)
+from mnist_example_utils import generate_visualizations
+
 
 # ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
+
 
 class MNISTNet(nn.Module):
     """Small CNN: two conv layers + two FC layers, ~200k parameters."""
@@ -53,171 +64,49 @@ class MNISTNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Layers shown in the video
+# Data
 # ---------------------------------------------------------------------------
 
-LAYERS_TO_PLOT = [
-    ("conv1.weight", "Conv1  (8×1×3×3)"),
-    ("conv2.weight", "Conv2  (16×8×3×3)"),
-    ("fc1.weight",   "FC1   (128×400)"),
-    ("fc2.weight",   "FC2   (10×128)"),
-]
 
-
-# ---------------------------------------------------------------------------
-# Visualisation helpers
-# ---------------------------------------------------------------------------
-
-def _render_conv_filters(weight: np.ndarray) -> np.ndarray:
-    """Tile conv filters into a 2-D grid. weight: (out, in, H, W)."""
-    out_ch, _in_ch, H, W = weight.shape
-    w = weight.mean(axis=1)  # average over input channels → (out, H, W)
-    cols = math.ceil(math.sqrt(out_ch))
-    rows = math.ceil(out_ch / cols)
-    canvas = np.full((rows * (H + 1) - 1, cols * (W + 1) - 1), np.nan)
-    for i, filt in enumerate(w):
-        r, c = divmod(i, cols)
-        canvas[r * (H + 1): r * (H + 1) + H, c * (W + 1): c * (W + 1) + W] = filt
-    return canvas
-
-
-def _make_video(
-    weight_history: list[dict[str, np.ndarray]],
-    accuracy_history: list[float],
-    out_path: Path,
-    fps: int = 4,
-) -> Path:
-    """Animate weight heatmaps over epochs; returns the path actually written."""
-    n_frames = len(weight_history)
-    n_panels = len(LAYERS_TO_PLOT)
-
-    # Pre-process every frame so animation update is cheap
-    rendered: list[list[np.ndarray]] = []
-    for snap in weight_history:
-        frame = []
-        for key, _ in LAYERS_TO_PLOT:
-            w = snap[key]
-            frame.append(_render_conv_filters(w) if w.ndim == 4 else w)
-        rendered.append(frame)
-
-    # Fixed symmetric colour scale per layer so changes are clearly visible
-    vlims: list[tuple[float, float]] = []
-    for i in range(n_panels):
-        flat = np.concatenate([f[i].ravel() for f in rendered])
-        abs_max = float(np.nanmax(np.abs(flat))) or 1.0
-        vlims.append((-abs_max, abs_max))
-
-    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4), constrained_layout=True)
-    if n_panels == 1:
-        axes = [axes]
-
-    images = []
-    for ax, (_, label), arr, (vmin, vmax) in zip(axes, LAYERS_TO_PLOT, rendered[0], vlims):
-        im = ax.imshow(
-            arr, aspect="auto", cmap="RdBu_r",
-            vmin=vmin, vmax=vmax, interpolation="nearest",
-        )
-        fig.colorbar(im, ax=ax, shrink=0.8, label="weight value")
-        ax.set_title(label, fontsize=9)
-        images.append(im)
-
-    title_text = fig.suptitle("", fontsize=12)
-
-    def update(frame: int) -> list:
-        acc = accuracy_history[frame] if frame < len(accuracy_history) else 0.0
-        title_text.set_text(f"Epoch {frame + 1}  |  Test accuracy: {acc:.1%}")
-        for im, arr in zip(images, rendered[frame]):
-            im.set_data(arr)
-        return [*images, title_text]
-
-    ani = animation.FuncAnimation(
-        fig, update, frames=n_frames,
-        interval=1000 // fps, blit=False,
-    )
-
-    # Prefer MP4; fall back to GIF if ffmpeg is unavailable
-    try:
-        writer = animation.FFMpegWriter(fps=fps)
-        ani.save(str(out_path), writer=writer)
-        result = out_path
-    except Exception:
-        result = out_path.with_suffix(".gif")
-        ani.save(str(result), writer=animation.PillowWriter(fps=fps))
-
-    plt.close(fig)
-    return result
-
-
-def _save_loss_curves(
-    train_losses: list[float],
-    test_losses: list[float],
-    out_path: Path,
-) -> None:
-    """Save a train/test loss curve image."""
-    epochs = range(1, len(train_losses) + 1)
-    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
-    ax.plot(epochs, train_losses, marker="o", label="Train loss")
-    ax.plot(epochs, test_losses,  marker="s", label="Test loss")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Cross-entropy loss")
-    ax.set_title("MNIST training curves")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.savefig(str(out_path), dpi=150)
-    plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main() -> None:
-    torch.manual_seed(42)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    run_name = petname.generate(words=2, separator="-")
-    run_dir = Path(__file__).parent.parent / "outputs" / "MNIST_example" / run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    # Shared MNIST download cache across runs
-    data_dir = Path(__file__).parent.parent / "outputs" / "MNIST_example" / "data"
-
-    print(f"Run name : {run_name}")
-    print(f"Run dir  : {run_dir}/")
-    print(f"Device   : {device}")
-
+def load_data(data_dir: Path, device: torch.device) -> tuple[DataLoader, DataLoader]:
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
     ])
     train_ds = datasets.MNIST(data_dir, train=True,  download=True, transform=transform)
     test_ds  = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=True)
 
-    model = MNISTNet().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    loss_fn = nn.CrossEntropyLoss()
+    pin = device.type == "cuda"
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin)
+    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin)
+    return train_loader, test_loader
 
-    observer = NeuroInquisitor(model, log_dir=run_dir, compress=True, create_new=True)
 
-    num_epochs = 10
-    accuracy_history: list[float] = []
+# ---------------------------------------------------------------------------
+# Train
+# ---------------------------------------------------------------------------
+
+
+def train(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    loss_fn: nn.Module,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    observer: NeuroInquisitor,
+    device: torch.device,
+    num_epochs: int,
+) -> tuple[list[float], list[float], list[float]]:
     train_loss_history: list[float] = []
-    test_loss_history: list[float] = []
+    test_loss_history:  list[float] = []
+    accuracy_history:   list[float] = []
 
-    print()
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
 
-        with tqdm(
-            train_loader,
-            desc=f"Epoch {epoch + 1:02d}/{num_epochs}",
-            unit="batch",
-            leave=True,
-        ) as pbar:
-            for images, labels in pbar:
+        with tqdm(train_loader, desc=f"Epoch {epoch + 1:02d}/{num_epochs}", unit="batch", leave=True) as pbar:
+            for step, (images, labels) in enumerate(pbar):
                 images, labels = images.to(device), labels.to(device)
                 optimizer.zero_grad()
                 loss = loss_fn(model(images), labels)
@@ -231,41 +120,158 @@ def main() -> None:
 
         model.eval()
         correct = total = 0
-        test_loss = 0.0
+        test_loss_acc = 0.0
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(device), labels.to(device)
                 out = model(images)
-                test_loss += loss_fn(out, labels).item()
-                preds = out.argmax(dim=1)
-                correct += (preds == labels).sum().item()
-                total += labels.size(0)
-        avg_test_loss = test_loss / len(test_loader)
+                test_loss_acc += loss_fn(out, labels).item()
+                correct += (out.argmax(1) == labels).sum().item()
+                total   += labels.size(0)
+
+        avg_test_loss = test_loss_acc / len(test_loader)
         acc = correct / total
         test_loss_history.append(avg_test_loss)
         accuracy_history.append(acc)
 
         tqdm.write(f"  → train loss={avg_train_loss:.4f}  test loss={avg_test_loss:.4f}  acc={acc:.1%}")
+
         observer.snapshot(
             epoch=epoch,
+            step=step,
             metadata={"loss": avg_train_loss, "test_loss": avg_test_loss, "accuracy": acc},
         )
 
     observer.close()
     print(f"\nTraining done. {num_epochs} snapshots saved.")
+    return train_loss_history, test_loss_history, accuracy_history
 
-    # --- load all snapshots and generate video ---
-    col = NeuroInquisitor.load(run_dir)
-    weight_history = [col.by_epoch(e) for e in range(num_epochs)]
 
-    video_path = run_dir / "weights_over_time.mp4"
-    print(f"\nGenerating video → {video_path} ...")
-    result = _make_video(weight_history, accuracy_history, video_path, fps=3)
-    print(f"Video saved: {result}")
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
 
-    curves_path = run_dir / "loss_curves.png"
-    _save_loss_curves(train_loss_history, test_loss_history, curves_path)
-    print(f"Loss curves: {curves_path}")
+
+def analyze(
+    snapshots: SnapshotCollection,
+    run_dir: Path,
+    test_loader: DataLoader,
+    replay_modules: list[str],
+    num_epochs: int,
+    device: torch.device,
+) -> list[dict[str, dict[str, np.ndarray]]]:
+    print("\n── SnapshotCollection ──")
+    print(f"  Available epochs : {snapshots.epochs}")
+    print(f"  Captured layers  : {len(snapshots.layers)} tensors")
+    print(f"  Total snapshots  : {len(snapshots)}")
+    print(f"  by_epoch(0) keys : {list(snapshots.by_epoch(0).keys())[:4]} …")
+    print(f"  by_layer('conv1.weight') epochs : {list(snapshots.by_layer('conv1.weight').keys())}")
+
+    arrays = snapshots.to_numpy(epoch=0, layers=["conv1.weight"])
+    print(f"  to_numpy(epoch=0, layers=['conv1.weight']) shape : {arrays['conv1.weight'].shape}")
+
+    restored = MNISTNet().to(device)
+    restored.load_state_dict(snapshots.to_state_dict(epoch=0), strict=False)
+    print(f"  to_state_dict(epoch=0) → model restored (strict=False)")
+
+    print("\n── ReplaySession ──")
+    replay_history: list[dict[str, dict[str, np.ndarray]]] = []
+    final_replay = None
+
+    for epoch in tqdm(range(num_epochs), desc="  Replaying checkpoints", unit="ckpt", leave=True):
+        final_replay = ReplaySession(
+            run=run_dir,
+            checkpoint=epoch,
+            model_factory=MNISTNet,
+            dataloader=test_loader,
+            modules=replay_modules,
+            capture=["activations", "gradients", "logits"],
+            activation_reduction="pool",
+            gradient_mode="aggregated",
+            dataset_slice=lambda samples: samples[:128],
+            slice_metadata={"description": "first 128 test samples"},
+        ).run()
+        replay_history.append({
+            "activations": final_replay.activations.to_numpy(),
+            "gradients":   final_replay.gradients.to_numpy(),
+        })
+
+    print(f"  Samples replayed : {final_replay.metadata.n_samples}")
+    print(f"  Logits shape     : {final_replay.logits.shape}")
+    for name in replay_modules:
+        print(f"  {name:6s} — activations {tuple(final_replay.activations[name].shape)}"
+              f"  gradients {tuple(final_replay.gradients[name].shape)}")
+
+    return replay_history
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    torch.manual_seed(42)
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
+
+    run_name = petname.generate(words=2, separator="-")
+    run_dir  = Path(__file__).parent.parent / "outputs" / "MNIST_example" / run_name
+    data_dir = Path(__file__).parent.parent / "outputs" / "MNIST_example" / "data"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Run name : {run_name}")
+    print(f"Run dir  : {run_dir}/")
+    print(f"Device   : {device}\n")
+
+    num_epochs     = 10
+    replay_modules = ["conv1", "conv2", "fc1"]
+
+    train_loader, test_loader = load_data(data_dir, device)
+
+    model     = MNISTNet().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn   = nn.CrossEntropyLoss()
+
+    policy = CapturePolicy(
+        capture_parameters=True,
+        capture_buffers=True,
+        capture_optimizer=True,
+        replay_activations=True,
+        replay_gradients=True,
+    )
+    run_meta = RunMetadata(
+        training_config={"batch_size": 256, "lr": 1e-3},
+        optimizer_class="Adam",
+        device=str(device),
+        model_class="MNISTNet",
+    )
+    observer = NeuroInquisitor(
+        model,
+        log_dir=run_dir,
+        compress=True,
+        create_new=True,
+        capture_policy=policy,
+        run_metadata=run_meta,
+    )
+
+    train_losses, test_losses, accuracy_history = train(
+        model, optimizer, loss_fn,
+        train_loader, test_loader, observer,
+        device, num_epochs,
+    )
+
+    snapshots      = NeuroInquisitor.load(run_dir)
+    replay_history = analyze(snapshots, run_dir, test_loader, replay_modules, num_epochs, device)
+    weight_history = [snapshots.by_epoch(e) for e in range(num_epochs)]
+
+    generate_visualizations(
+        weight_history, replay_history, replay_modules,
+        accuracy_history, train_losses, test_losses, run_dir,
+    )
     print(f"\nAll outputs in: {run_dir}/")
 
 
