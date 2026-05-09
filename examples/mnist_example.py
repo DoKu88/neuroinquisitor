@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -68,7 +69,12 @@ class MNISTNet(nn.Module):
 # ---------------------------------------------------------------------------
 
 
-def load_data(data_dir: Path, device: torch.device) -> tuple[DataLoader, DataLoader]:
+def load_data(
+    data_dir: Path,
+    device: torch.device,
+    train_batch_size: int,
+    test_batch_size: int,
+) -> tuple[DataLoader, DataLoader]:
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
@@ -77,8 +83,8 @@ def load_data(data_dir: Path, device: torch.device) -> tuple[DataLoader, DataLoa
     test_ds  = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    train_loader = DataLoader(train_ds, batch_size=train_batch_size, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=test_batch_size,  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
     return train_loader, test_loader
 
 
@@ -211,6 +217,10 @@ def analyze(
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent / "configs" / "mnist_example.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(42)
     device = torch.device(
         "cuda" if torch.cuda.is_available()
@@ -227,13 +237,16 @@ def main() -> None:
     print(f"Run dir  : {run_dir}/")
     print(f"Device   : {device}\n")
 
-    num_epochs     = 10
-    replay_modules = ["conv1", "conv2", "fc1"]
+    num_epochs     = cfg["num_epochs"]
+    replay_modules = cfg["replay_modules"]
+    lr             = cfg["lr"]
 
-    train_loader, test_loader = load_data(data_dir, device)
+    train_loader, test_loader = load_data(
+        data_dir, device, cfg["train_batch_size"], cfg["test_batch_size"]
+    )
 
     model     = MNISTNet().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     loss_fn   = nn.CrossEntropyLoss()
 
     policy = CapturePolicy(
@@ -244,7 +257,7 @@ def main() -> None:
         replay_gradients=True,
     )
     run_meta = RunMetadata(
-        training_config={"batch_size": 256, "lr": 1e-3},
+        training_config={"batch_size": cfg["train_batch_size"], "lr": lr},
         optimizer_class="Adam",
         device=str(device),
         model_class="MNISTNet",

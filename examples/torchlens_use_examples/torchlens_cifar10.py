@@ -52,6 +52,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 import torchlens as tl
@@ -68,8 +69,12 @@ from torchlens_cifar10_utils import generate_torchlens_visualizations
 # Constants
 # ---------------------------------------------------------------------------
 
-TARGET_MODULES = ["conv1", "conv2", "conv3", "fc1", "fc2"]
-PROBE_BATCH_SIZE = 64
+_cfg = yaml.safe_load(
+    (Path(__file__).parent.parent / "configs" / "torchlens_use_examples_torchlens_cifar10.yaml").read_text()
+)
+
+TARGET_MODULES   = _cfg["target_modules"]
+PROBE_BATCH_SIZE = _cfg["probe_batch_size"]
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +133,8 @@ def load_data(
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     pin          = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    train_loader = DataLoader(train_ds, batch_size=_cfg["train_batch_size"], shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=_cfg["test_batch_size"],  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
 
     # Fixed probe batch: same images every epoch so TorchLens comparisons are
     # apples-to-apples across checkpoints.
@@ -406,7 +411,7 @@ def main() -> None:
     data_dir = Path(__file__).parent.parent.parent / "outputs" / "CIFAR10_TorchLens" / "data"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    num_epochs = 10
+    num_epochs = _cfg["num_epochs"]
 
     print(f"Run name : {run_name}")
     print(f"Run dir  : {run_dir}/")
@@ -415,7 +420,7 @@ def main() -> None:
     train_loader, test_loader, probe_images, probe_labels = load_data(data_dir, device)
 
     model     = CIFAR10Net().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
     loss_fn   = nn.CrossEntropyLoss()
 

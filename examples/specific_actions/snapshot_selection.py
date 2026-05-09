@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+import yaml
 
 from neuroinquisitor import NeuroInquisitor, SnapshotCollection
 
@@ -127,20 +128,25 @@ def _make_gif(
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent.parent / "configs" / "specific_actions_snapshot_selection.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(0)
 
-    X = torch.randn(128, 4)
+    X = torch.randn(cfg["n_samples"], 4)
     y = (X.sum(dim=1, keepdim=True) > 0).float()
 
     model = TinyMLP()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
     loss_fn = nn.BCEWithLogitsLoss()
 
     ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     log_dir = Path(__file__).parent.parent.parent / "outputs" / "network_weights" / ts
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Training TinyMLP for 40 epochs …")
+    num_epochs = cfg["num_epochs"]
+    print(f"Training TinyMLP for {num_epochs} epochs …")
     observer = NeuroInquisitor(
         model,
         log_dir=log_dir,
@@ -149,7 +155,6 @@ def main() -> None:
         create_new=True,
     )
 
-    num_epochs = 40
     for epoch in range(num_epochs):
         optimizer.zero_grad()
         loss = loss_fn(model(X), y)
@@ -167,36 +172,39 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     all_layers = ["fc1.weight", "fc2.weight"]
+    gif_fps    = cfg["gif_fps"]
+    mid        = num_epochs // 2
 
     # --- Selection 1: all layers, all epochs ---
     print("Selection 1 — all layers, all epochs")
     print("  col.select()")
     _make_gif(col.select(), all_layers, "All layers · all epochs",
-              out_dir / f"{ts}_all_layers_all_epochs.gif")
+              out_dir / f"{ts}_all_layers_all_epochs.gif", fps=gif_fps)
 
-    # --- Selection 2: early training (epochs 0–19) ---
-    print("\nSelection 2 — early training, epochs 0–19")
-    print("  col.select(epochs=range(0, 20))")
-    _make_gif(col.select(epochs=range(0, 20)), all_layers, "All layers · epochs 0–19 (early)",
-              out_dir / f"{ts}_early_training_epochs_00_19.gif")
+    # --- Selection 2: early training (first half) ---
+    print(f"\nSelection 2 — early training, epochs 0–{mid - 1}")
+    print(f"  col.select(epochs=range(0, {mid}))")
+    _make_gif(col.select(epochs=range(0, mid)), all_layers, f"All layers · epochs 0–{mid - 1} (early)",
+              out_dir / f"{ts}_early_training_epochs_00_{mid - 1:02d}.gif", fps=gif_fps)
 
-    # --- Selection 3: late training (epochs 20–39) ---
-    print("\nSelection 3 — late training, epochs 20–39")
-    print("  col.select(epochs=range(20, 40))")
-    _make_gif(col.select(epochs=range(20, 40)), all_layers, "All layers · epochs 20–39 (late)",
-              out_dir / f"{ts}_late_training_epochs_20_39.gif")
+    # --- Selection 3: late training (second half) ---
+    print(f"\nSelection 3 — late training, epochs {mid}–{num_epochs - 1}")
+    print(f"  col.select(epochs=range({mid}, {num_epochs}))")
+    _make_gif(col.select(epochs=range(mid, num_epochs)), all_layers, f"All layers · epochs {mid}–{num_epochs - 1} (late)",
+              out_dir / f"{ts}_late_training_epochs_{mid:02d}_{num_epochs - 1:02d}.gif", fps=gif_fps)
 
     # --- Selection 4: fc1.weight only, all epochs ---
     print("\nSelection 4 — fc1.weight only, all epochs")
     print('  col.select(layers="fc1.weight")')
     _make_gif(col.select(layers="fc1.weight"), ["fc1.weight"], "fc1.weight only · all epochs",
-              out_dir / f"{ts}_fc1_weight_all_epochs.gif")
+              out_dir / f"{ts}_fc1_weight_all_epochs.gif", fps=gif_fps)
 
     # --- Selection 5: late training + fc1.weight (combined) ---
-    print("\nSelection 5 — late training + fc1.weight combined")
-    print('  col.select(epochs=range(20, 40), layers="fc1.weight")')
-    _make_gif(col.select(epochs=range(20, 40), layers="fc1.weight"), ["fc1.weight"],
-              "fc1.weight · epochs 20–39", out_dir / f"{ts}_late_fc1_weight.gif")
+    print(f"\nSelection 5 — late training + fc1.weight combined")
+    print(f'  col.select(epochs=range({mid}, {num_epochs}), layers="fc1.weight")')
+    _make_gif(col.select(epochs=range(mid, num_epochs), layers="fc1.weight"), ["fc1.weight"],
+              f"fc1.weight · epochs {mid}–{num_epochs - 1}",
+              out_dir / f"{ts}_late_fc1_weight.gif", fps=gif_fps)
 
     print(f"\nAll GIFs written to {out_dir}/")
 

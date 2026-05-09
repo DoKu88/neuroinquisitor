@@ -12,3 +12,18 @@ dependencies:
   - torchvision
   - matplotlib
   - transformer_lens
+
+# model
+n_layers: 4
+n_heads: 4
+d_model: 128
+d_mlp: 256
+patch_size: 4
+
+# training
+num_epochs: 30
+train_batch_size: 128
+test_batch_size: 256
+lr: 0.0003
+weight_decay: 0.1
+label_smoothing: 0.1

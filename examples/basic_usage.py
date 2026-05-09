@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -59,18 +60,23 @@ class TinyMLP(nn.Module):
 # ---------------------------------------------------------------------------
 
 
-def load_data(device: torch.device) -> tuple[DataLoader, DataLoader]:
+def load_data(
+    device: torch.device,
+    train_batch_size: int,
+    test_batch_size: int,
+    n_samples: int,
+    n_train: int,
+) -> tuple[DataLoader, DataLoader]:
     torch.manual_seed(0)
-    X = torch.randn(512, 4)
+    X = torch.randn(n_samples, 4)
     y = (X.sum(dim=1, keepdim=True) > 0).float()
 
-    n_train = 400
     X_train, y_train = X[:n_train], y[:n_train]
     X_test,  y_test  = X[n_train:], y[n_train:]
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=64,  shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=128, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=train_batch_size, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=test_batch_size,  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
     return train_loader, test_loader
 
 
@@ -192,6 +198,10 @@ def analyze(
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent / "configs" / "basic_usage.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(42)
     device = torch.device(
         "cuda" if torch.cuda.is_available()
@@ -207,13 +217,20 @@ def main() -> None:
     print(f"Run dir  : {run_dir}/")
     print(f"Device   : {device}\n")
 
-    num_epochs     = 30
-    replay_modules = ["fc1", "fc2"]
+    num_epochs     = cfg["num_epochs"]
+    replay_modules = cfg["replay_modules"]
+    lr             = cfg["lr"]
 
-    train_loader, test_loader = load_data(device)
+    train_loader, test_loader = load_data(
+        device,
+        cfg["train_batch_size"],
+        cfg["test_batch_size"],
+        cfg["n_samples"],
+        cfg["n_train"],
+    )
 
     model     = TinyMLP().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-2)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     loss_fn   = nn.BCEWithLogitsLoss()
 
     policy = CapturePolicy(
@@ -224,7 +241,7 @@ def main() -> None:
         replay_gradients=True,
     )
     run_meta = RunMetadata(
-        training_config={"batch_size": 64, "lr": 1e-2},
+        training_config={"batch_size": cfg["train_batch_size"], "lr": lr},
         optimizer_class="Adam",
         device=str(device),
         model_class="TinyMLP",

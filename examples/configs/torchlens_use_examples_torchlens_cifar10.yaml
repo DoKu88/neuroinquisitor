@@ -11,3 +11,19 @@ dependencies:
   - torchvision
   - matplotlib
   - torchlens
+
+# training
+num_epochs: 10
+train_batch_size: 256
+test_batch_size: 512
+lr: 0.001
+weight_decay: 0.0001
+
+# analysis
+probe_batch_size: 64
+target_modules:
+  - conv1
+  - conv2
+  - conv3
+  - fc1
+  - fc2

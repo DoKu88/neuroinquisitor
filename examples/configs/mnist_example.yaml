@@ -9,3 +9,15 @@ dependencies:
   - petname
   - torchvision
   - matplotlib
+
+# training
+num_epochs: 10
+train_batch_size: 256
+test_batch_size: 512
+lr: 0.001
+
+# analysis
+replay_modules:
+  - conv1
+  - conv2
+  - fc1

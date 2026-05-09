@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -52,13 +53,17 @@ from grokking_example_utils import generate_visualizations
 # Config
 # ---------------------------------------------------------------------------
 
-P = 97
-D_MODEL = 128
-N_HEADS = 4
-FFN_DIM = 512
-TRAIN_FRAC = 0.5
-NUM_STEPS = 15_000
-SNAPSHOT_EVERY = 150
+_cfg = yaml.safe_load(
+    (Path(__file__).parent / "configs" / "grokking_example.yaml").read_text()
+)
+
+P             = _cfg["p"]
+D_MODEL       = _cfg["d_model"]
+N_HEADS       = _cfg["n_heads"]
+FFN_DIM       = _cfg["ffn_dim"]
+TRAIN_FRAC    = _cfg["train_frac"]
+NUM_STEPS     = _cfg["num_steps"]
+SNAPSHOT_EVERY = _cfg["snapshot_every"]
 
 EQ_TOKEN = P
 
@@ -289,7 +294,7 @@ def main() -> None:
     print()
 
     num_snapshots  = NUM_STEPS // SNAPSHOT_EVERY
-    replay_modules = ["output_proj"]
+    replay_modules = _cfg["replay_modules"]
 
     train_x, train_y, test_x, test_y = make_dataset(P, TRAIN_FRAC)
     test_loader = make_test_loader(test_x, test_y)
@@ -297,7 +302,7 @@ def main() -> None:
     test_x,  test_y  = test_x.to(device),  test_y.to(device)
 
     model     = model_factory().to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0)
+    optimizer = optim.AdamW(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])
     loss_fn   = nn.CrossEntropyLoss()
 
     policy = CapturePolicy(
@@ -309,7 +314,7 @@ def main() -> None:
     )
     run_meta = RunMetadata(
         training_config={
-            "lr": 1e-3, "weight_decay": 1.0,
+            "lr": _cfg["lr"], "weight_decay": _cfg["weight_decay"],
             "num_steps": NUM_STEPS, "snapshot_every": SNAPSHOT_EVERY,
         },
         optimizer_class="AdamW",

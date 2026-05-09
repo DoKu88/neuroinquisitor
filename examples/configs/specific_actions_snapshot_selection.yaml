@@ -6,3 +6,13 @@ tags:
   - visualization
 dependencies:
   - matplotlib
+
+# data
+n_samples: 128
+
+# training
+num_epochs: 40
+lr: 0.01
+
+# visualization
+gif_fps: 4

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import yaml
 
 from neuroinquisitor import NeuroInquisitor
 
@@ -30,8 +31,12 @@ class TinyMLP(nn.Module):
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent.parent / "configs" / "specific_actions_append_run.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(0)
-    X = torch.randn(64, 4)
+    X = torch.randn(cfg["n_samples"], 4)
     y = (X.sum(1, keepdim=True) > 0).float()
     loss_fn = nn.BCEWithLogitsLoss()
 
@@ -40,12 +45,15 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     print(f"log_dir: {log_dir}\n")
 
-    # --- session 1: epochs 0–4 ---
+    n1 = cfg["num_epochs_session1"]
+    n2 = cfg["num_epochs_session2"]
+
+    # --- session 1 ---
     model = TinyMLP()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    optimizer = torch.optim.SGD(model.parameters(), lr=cfg["lr"])
 
     observer = NeuroInquisitor(model, log_dir=log_dir, create_new=True)
-    for epoch in range(5):
+    for epoch in range(n1):
         optimizer.zero_grad()
         loss_fn(model(X), y).backward()
         optimizer.step()
@@ -53,10 +61,10 @@ def main() -> None:
     observer.close()
     print(f"session 1 done  — {NeuroInquisitor.load(log_dir).epochs}")
 
-    # --- session 2: resume, epochs 5–9 ---
+    # --- session 2: resume ---
     # model state would normally be restored from a checkpoint here
     observer = NeuroInquisitor(model, log_dir=log_dir, create_new=False)
-    for epoch in range(5, 10):
+    for epoch in range(n1, n1 + n2):
         optimizer.zero_grad()
         loss_fn(model(X), y).backward()
         optimizer.step()

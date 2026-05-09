@@ -4,3 +4,13 @@ tags:
   - specific-action
   - replay
   - logits
+
+# training
+num_train_epochs: 5
+train_lr: 0.05
+n_train: 64
+
+# replay
+n_eval: 16
+eval_batch_size: 8
+replay_checkpoint: 4

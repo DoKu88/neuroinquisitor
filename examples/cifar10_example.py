@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -78,6 +79,8 @@ class CIFAR10Net(nn.Module):
 def load_data(
     data_dir: Path,
     device: torch.device,
+    train_batch_size: int,
+    test_batch_size: int,
 ) -> tuple[DataLoader, DataLoader]:
     transform_train = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -94,8 +97,8 @@ def load_data(
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    train_loader = DataLoader(train_ds, batch_size=train_batch_size, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=test_batch_size,  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
     return train_loader, test_loader
 
 
@@ -231,6 +234,10 @@ def analyze(
 
 
 def main() -> None:
+    cfg_path = Path(__file__).parent / "configs" / "cifar10_example.yaml"
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
     torch.manual_seed(42)
     device = torch.device(
         "cuda" if torch.cuda.is_available()
@@ -247,14 +254,19 @@ def main() -> None:
     print(f"Run dir  : {run_dir}/")
     print(f"Device   : {device}\n")
 
-    num_epochs     = 60
-    replay_modules = ["conv1", "conv2", "fc1"]
+    num_epochs     = cfg["num_epochs"]
+    replay_modules = cfg["replay_modules"]
+    lr             = cfg["lr"]
+    weight_decay   = cfg["weight_decay"]
+    T_max          = cfg["T_max"]
 
-    train_loader, test_loader = load_data(data_dir, device)
+    train_loader, test_loader = load_data(
+        data_dir, device, cfg["train_batch_size"], cfg["test_batch_size"]
+    )
 
     model     = CIFAR10Net().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
     loss_fn   = nn.CrossEntropyLoss()
 
     policy = CapturePolicy(
@@ -265,7 +277,10 @@ def main() -> None:
         replay_gradients=True,
     )
     run_meta = RunMetadata(
-        training_config={"batch_size": 256, "lr": 1e-3, "weight_decay": 1e-4, "T_max": 60},
+        training_config={
+            "batch_size": cfg["train_batch_size"], "lr": lr,
+            "weight_decay": weight_decay, "T_max": T_max,
+        },
         optimizer_class="Adam",
         device=str(device),
         model_class="CIFAR10Net",

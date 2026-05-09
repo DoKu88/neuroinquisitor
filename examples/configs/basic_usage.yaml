@@ -6,3 +6,18 @@ tags:
 dependencies:
   - petname
   - matplotlib
+
+# data
+n_samples: 512
+n_train: 400
+
+# training
+num_epochs: 30
+train_batch_size: 64
+test_batch_size: 128
+lr: 0.01
+
+# analysis
+replay_modules:
+  - fc1
+  - fc2

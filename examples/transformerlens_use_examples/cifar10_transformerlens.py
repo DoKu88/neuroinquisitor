@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
@@ -52,6 +53,10 @@ from neuroinquisitor import (
     SnapshotCollection,
 )
 from cifar10_transformerlens_utils import generate_visualizations
+
+_cfg = yaml.safe_load(
+    (Path(__file__).parent.parent / "configs" / "transformerlens_use_examples_cifar10_transformerlens.yaml").read_text()
+)
 
 CIFAR10_CLASSES = [
     "airplane", "automobile", "bird", "cat", "deer",
@@ -237,11 +242,11 @@ def load_data(data_dir: Path, device: torch.device) -> tuple[DataLoader, DataLoa
 
     pin = device.type == "cuda"
     train_loader = DataLoader(
-        train_ds, batch_size=128, shuffle=True,  num_workers=2,
+        train_ds, batch_size=_cfg["train_batch_size"], shuffle=True,  num_workers=2,
         pin_memory=pin, persistent_workers=True,
     )
     test_loader = DataLoader(
-        test_ds,  batch_size=256, shuffle=False, num_workers=2,
+        test_ds,  batch_size=_cfg["test_batch_size"], shuffle=False, num_workers=2,
         pin_memory=pin, persistent_workers=True,
     )
     return train_loader, test_loader
@@ -454,7 +459,7 @@ def activation_patching_accuracy(
         patch = cache_early[key].to(device)
 
         def make_patch_hook(p: torch.Tensor):
-            def hook(value: torch.Tensor, _hook: object) -> torch.Tensor:
+            def hook(value: torch.Tensor, hook=None) -> torch.Tensor:
                 return p
             return hook
 
@@ -614,13 +619,13 @@ def main() -> None:
         else "cpu"
     )
 
-    N_LAYERS   = 4
-    N_HEADS    = 4
-    D_MODEL    = 128
+    N_LAYERS   = _cfg["n_layers"]
+    N_HEADS    = _cfg["n_heads"]
+    D_MODEL    = _cfg["d_model"]
     D_HEAD     = D_MODEL // N_HEADS
-    D_MLP      = 256
-    PATCH_SIZE = 4
-    NUM_EPOCHS = 30
+    D_MLP      = _cfg["d_mlp"]
+    PATCH_SIZE = _cfg["patch_size"]
+    NUM_EPOCHS = _cfg["num_epochs"]
 
     run_name = petname.generate(words=2, separator="-")
     run_dir  = Path(__file__).parent.parent.parent / "outputs" / "CIFAR10_TransformerLens" / run_name
@@ -634,9 +639,9 @@ def main() -> None:
     train_loader, test_loader = load_data(data_dir, device)
 
     model     = PatchViT(d_model=D_MODEL, n_heads=N_HEADS, n_layers=N_LAYERS, d_mlp=D_MLP, patch_size=PATCH_SIZE).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
+    optimizer = optim.AdamW(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
-    loss_fn   = nn.CrossEntropyLoss(label_smoothing=0.1)
+    loss_fn   = nn.CrossEntropyLoss(label_smoothing=_cfg["label_smoothing"])
 
     print(f"Model params : {sum(p.numel() for p in model.parameters()):,}")
     print(f"Hook points  : {len(model.hook_dict)}")
@@ -651,7 +656,7 @@ def main() -> None:
     )
     run_meta = RunMetadata(
         training_config={
-            "batch_size": 128, "lr": 3e-4, "weight_decay": 0.1,
+            "batch_size": _cfg["train_batch_size"], "lr": _cfg["lr"], "weight_decay": _cfg["weight_decay"],
             "d_model": D_MODEL, "n_heads": N_HEADS, "n_layers": N_LAYERS,
             "d_mlp": D_MLP, "patch_size": PATCH_SIZE,
         },

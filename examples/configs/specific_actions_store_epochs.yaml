@@ -4,3 +4,10 @@ tags:
   - specific-action
   - snapshotting
   - epochs
+
+# data
+n_samples: 64
+
+# training
+num_epochs: 5
+lr: 0.05

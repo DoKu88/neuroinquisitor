@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import petname
 import torch
+import yaml
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -47,6 +48,10 @@ from neuroinquisitor import (
 from cifar10_captum_utils import (
     compute_attributions_per_epoch,
     generate_captum_visualizations,
+)
+
+_cfg = yaml.safe_load(
+    (Path(__file__).parent.parent / "configs" / "captum_use_examples_cifar10_captum.yaml").read_text()
 )
 
 
@@ -124,8 +129,8 @@ def load_data(
     test_ds  = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
-    test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
+    train_loader = DataLoader(train_ds, batch_size=_cfg["train_batch_size"], shuffle=True,  num_workers=2, pin_memory=pin, persistent_workers=True)
+    test_loader  = DataLoader(test_ds,  batch_size=_cfg["test_batch_size"],  shuffle=False, num_workers=2, pin_memory=pin, persistent_workers=True)
 
     # Fixed attribution batch: one normalised image per class, always kept on CPU.
     attr_images, attr_labels = _one_per_class(test_ds)
@@ -219,7 +224,7 @@ def analyze(
     print("\n── Path A  col.to_state_dict() → Captum ──")
     print("  Each NI checkpoint: load weights into fresh model → IntegratedGradients + LayerGradCam")
     ig_mag_grids, gc_grids, ig_signed_grids = compute_attributions_per_epoch(
-        snapshots, CIFAR10Net, attr_images, attr_labels, n_steps=30,
+        snapshots, CIFAR10Net, attr_images, attr_labels, n_steps=_cfg["ig_n_steps"],
     )
     print(f"  Attributions computed for {len(snapshots.epochs)} epoch(s).")
 
@@ -293,13 +298,13 @@ def main() -> None:
     print(f"Train device  : {train_device}")
     print(f"Captum device : cpu\n")
 
-    num_epochs = 2
+    num_epochs = _cfg["num_epochs"]
 
     train_loader, test_loader, attr_images, attr_labels = load_data(data_dir, train_device)
 
     model     = CIFAR10Net().to(train_device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
+    optimizer = optim.Adam(model.parameters(), lr=_cfg["lr"], weight_decay=_cfg["weight_decay"])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=_cfg["T_max"])
     loss_fn   = nn.CrossEntropyLoss()
 
     # capture_buffers=True includes BatchNorm running stats so to_state_dict()

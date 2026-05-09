@@ -7,7 +7,7 @@ does not stop the run.  Results are written to
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import yaml  # PyYAML
@@ -96,7 +96,7 @@ def main() -> None:
         return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y_%m_%d_%H_%M_%S")
+    timestamp = datetime.now().astimezone().strftime("%Y_%m_%d_%H_%M_%S")
     log_path = OUTPUT_DIR / f"run_{timestamp}.yaml"
 
     write_log(log_path, timestamp, [], len(scripts))
