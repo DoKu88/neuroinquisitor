@@ -1,0 +1,39 @@
+name: Multi-Architecture Showcase
+description: FC + CNN + Transformer on synthetic sequence classification — identical NeuroInquisitor setup for all three architectures.
+tags:
+  - full-showcase
+  - mlp
+  - cnn
+  - transformer
+dependencies:
+  - petname
+  - matplotlib
+
+# data
+n_samples: 400
+seq_len: 8
+train_frac: 0.8
+
+# training
+num_epochs: 20
+batch_size: 64
+lr: 0.01
+
+# analysis — replay at these epoch indices (must be < num_epochs)
+replay_epochs:
+  - 0
+  - 4
+  - 9
+  - 14
+  - 19
+
+replay_modules:
+  mlp:
+    - fc1
+    - fc2
+  cnn:
+    - conv
+    - fc
+  transformer:
+    - embed
+    - classifier

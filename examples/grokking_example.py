@@ -1,19 +1,21 @@
-"""Grokking: modular addition — full NeuroInquisitor feature showcase.
+"""Grokking: modular addition — step-based NeuroInquisitor showcase.
 
-Demonstrates every implemented capability:
-  • CapturePolicy  — capture parameters, buffers, and optimizer state
-  • RunMetadata    — attach training provenance to the run
-  • Snapshots      — weight + buffer checkpoints with per-step metadata
-  • SnapshotCollection — by_epoch, by_layer, select, to_state_dict, to_numpy
-  • ReplaySession  — activations, gradients, and logits via forward/backward hooks
-  • Visualization  — weight-evolution video, replay figure, and accuracy curves
+"Grokking" (Power et al. 2022) is the ideal testbed for NeuroInquisitor's
+step-based snapshotting: the training dynamics split into two sharply distinct
+phases separated by thousands of steps, making the weight-space trajectory the
+primary object of scientific interest rather than a summary statistic.
 
-"Grokking" (Power et al. 2022) is a two-phase training phenomenon:
-  Phase 1 — memorisation: train loss → 0, test loss stays high.
-  Phase 2 — generalisation: after much more training, test loss suddenly collapses too.
-
-The weight transition between phases is dramatic. The token embeddings develop
-clean Fourier structure in phase 2 that is completely absent in phase 1.
+What makes this example unique:
+  • Step-based snapshots — NI records at every N gradient steps, not epochs,
+    so the phase boundary appears as a visible discontinuity in weight space.
+  • Phase transition in weight space — L2 distance from initialisation, cosine
+    similarity between adjacent checkpoints, and weight norms all shift abruptly
+    when generalisation begins.  SnapshotCollection.by_layer() makes these
+    trajectories trivial to extract.
+  • Fourier structure in token embeddings — after grokking, the token embedding
+    matrix (token_emb.weight) develops clean frequency components that are absent
+    during the memorisation phase.  Plotting singular values over checkpoints
+    reveals when this structure emerges.
 
 Task: learn (a + b) mod p for a prime p, treating it as classification over p classes.
       All p² input pairs form the dataset; ~50% is held out as the test split.
