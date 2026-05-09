@@ -405,8 +405,8 @@ def make_combined_video(
     grad_ylims  = {m: max(grad_mags[e][m].max() for e in range(n_frames)) for m in replay_modules if m in grad_mags[0]}
     heat_vmaxes = {m: max(grad_heat[e][m].max() for e in range(n_frames)) for m in replay_modules if m in grad_heat[0]}
 
-    fig = plt.figure(figsize=(22, 22))
-    gs  = fig.add_gridspec(4, 12, hspace=0.55, wspace=0.45)
+    fig = plt.figure(figsize=(26, 22))
+    gs  = fig.add_gridspec(4, 12, hspace=0.55, wspace=0.65)
 
     ax_w    = [fig.add_subplot(gs[0, i * 3: (i + 1) * 3]) for i in range(4)]
     ax_act  = [fig.add_subplot(gs[1, i * 4: (i + 1) * 4]) for i in range(n_mods)]
@@ -426,9 +426,7 @@ def make_combined_video(
     fc1_init[:, 0] = fc1_timeline[:, 0]
     im_fc1_norms = ax_w[2].imshow(fc1_init, aspect="auto", cmap="plasma", vmin=0, vmax=fc1_vmax, interpolation="nearest")
     fig.colorbar(im_fc1_norms, ax=ax_w[2], shrink=0.7, label="‖row‖₂")
-    ax_w[2].set_title("FC1 — neuron row-norms", fontsize=7)
-    ax_w[2].set_xlabel("Epoch", fontsize=7)
-    ax_w[2].set_ylabel("Neuron", fontsize=7)
+    ax_w[2].set_title("FC1 — neuron row-norms (x: epoch, y: neuron)", fontsize=7)
 
     im_delta = ax_w[3].imshow(delta_rendered[0], interpolation="nearest")
     ax_w[3].set_title("Conv1  |W_t − W_0|", fontsize=7)

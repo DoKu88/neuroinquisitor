@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -363,7 +364,9 @@ class ReplaySession:
             try:
                 if do_grad:
                     logits = model(inputs)
-                    logits.sum().backward()
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", "Full backward hook", UserWarning)
+                        logits.sum().backward()
                     model.zero_grad()
                 else:
                     with torch.no_grad():

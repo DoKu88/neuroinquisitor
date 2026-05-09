@@ -247,7 +247,7 @@ def main() -> None:
     print(f"Run dir  : {run_dir}/")
     print(f"Device   : {device}\n")
 
-    num_epochs     = 5
+    num_epochs     = 60
     replay_modules = ["conv1", "conv2", "fc1"]
 
     train_loader, test_loader = load_data(data_dir, device)
