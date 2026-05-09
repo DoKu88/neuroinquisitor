@@ -11,6 +11,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def generate_visualizations(
+    weight_history: list[dict[str, np.ndarray]],
+    replay_history: list[dict[str, dict[str, np.ndarray]]],
+    replay_modules: list[str],
+    accuracy_history: list[float],
+    train_loss_history: list[float],
+    test_loss_history: list[float],
+    run_dir: Path,
+    fps: int = 4,
+) -> None:
+    print("\n── Visualizations ──")
+
+    video_path = run_dir / "weights_over_time.mp4"
+    print(f"  Generating weight video    → {video_path.name} …")
+    print(f"  Saved: {make_video(weight_history, accuracy_history, video_path, fps=fps).name}")
+
+    replay_vid_path = run_dir / "activations_gradients.mp4"
+    print(f"  Generating replay video    → {replay_vid_path.name} …")
+    print(f"  Saved: {make_replay_video(replay_history, replay_modules, accuracy_history, replay_vid_path, fps=fps).name}")
+
+    combined_path = run_dir / "full_dashboard.mp4"
+    print(f"  Generating combined video  → {combined_path.name} …")
+    print(f"  Saved: {make_combined_video(weight_history, replay_history, accuracy_history, replay_modules, combined_path, fps=fps).name}")
+
+    curves_path = run_dir / "loss_curves.png"
+    save_loss_curves(train_loss_history, test_loss_history, accuracy_history, curves_path)
+    print(f"  Saved: {curves_path.name}")
+
+
 # ---------------------------------------------------------------------------
 # Weight rendering helpers
 # ---------------------------------------------------------------------------

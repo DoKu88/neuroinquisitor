@@ -18,6 +18,7 @@ Requires:
 from __future__ import annotations
 
 from pathlib import Path
+
 import numpy as np
 import petname
 import torch
@@ -32,13 +33,9 @@ from neuroinquisitor import (
     NeuroInquisitor,
     ReplaySession,
     RunMetadata,
+    SnapshotCollection,
 )
-from cifar10_example_utils import (
-    make_video,
-    make_replay_video,
-    make_combined_video,
-    save_loss_curves,
-)
+from cifar10_example_utils import generate_visualizations
 
 
 # ---------------------------------------------------------------------------
@@ -74,29 +71,14 @@ class CIFAR10Net(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Data
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    torch.manual_seed(42)
-    device = torch.device(
-        "cuda" if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available()
-        else "cpu"
-    )
-
-    run_name = petname.generate(words=2, separator="-")
-    run_dir  = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / run_name
-    data_dir = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / "data"
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Run name : {run_name}")
-    print(f"Run dir  : {run_dir}/")
-    print(f"Device   : {device}\n")
-
-    # ── Data ──────────────────────────────────────────────────────────────────
-
+def load_data(
+    data_dir: Path,
+    device: torch.device,
+) -> tuple[DataLoader, DataLoader]:
     transform_train = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(32, padding=4),
@@ -114,46 +96,25 @@ def main() -> None:
     pin = device.type == "cuda"
     train_loader = DataLoader(train_ds, batch_size=256, shuffle=True,  num_workers=2, pin_memory=pin)
     test_loader  = DataLoader(test_ds,  batch_size=512, shuffle=False, num_workers=2, pin_memory=pin)
+    return train_loader, test_loader
 
-    # ── Model + optimiser ─────────────────────────────────────────────────────
 
-    model     = CIFAR10Net().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
-    loss_fn   = nn.CrossEntropyLoss()
+# ---------------------------------------------------------------------------
+# Train
+# ---------------------------------------------------------------------------
 
-    # ── NeuroInquisitor — CapturePolicy + RunMetadata ─────────────────────────
-    #
-    # CapturePolicy: opt-in to buffers (BatchNorm running stats) and optimizer
-    #   state in addition to the default parameter snapshots.
-    # RunMetadata: attach provenance so the run is self-describing on disk.
 
-    policy = CapturePolicy(
-        capture_parameters=True,
-        capture_buffers=True,
-        capture_optimizer=True,
-        replay_activations=True,
-        replay_gradients=True,
-    )
-    run_meta = RunMetadata(
-        training_config={"batch_size": 256, "lr": 1e-3, "weight_decay": 1e-4, "T_max": 60},
-        optimizer_class="Adam",
-        device=str(device),
-        model_class="CIFAR10Net",
-    )
-
-    observer = NeuroInquisitor(
-        model,
-        log_dir=run_dir,
-        compress=True,
-        create_new=True,
-        capture_policy=policy,
-        run_metadata=run_meta,
-    )
-
-    # ── Training loop ─────────────────────────────────────────────────────────
-
-    num_epochs = 5
+def train(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler,
+    loss_fn: nn.Module,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    observer: NeuroInquisitor,
+    device: torch.device,
+    num_epochs: int,
+) -> tuple[list[float], list[float], list[float]]:
     train_loss_history: list[float] = []
     test_loss_history:  list[float] = []
     accuracy_history:   list[float] = []
@@ -178,8 +139,8 @@ def main() -> None:
 
         model.eval()
         total = 0
-        test_loss_acc  = torch.zeros(1, device=device)
-        correct_acc    = torch.zeros(1, device=device, dtype=torch.long)
+        test_loss_acc = torch.zeros(1, device=device)
+        correct_acc   = torch.zeros(1, device=device, dtype=torch.long)
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(device), labels.to(device)
@@ -195,7 +156,6 @@ def main() -> None:
 
         tqdm.write(f"  → train loss={avg_train_loss:.4f}  test loss={avg_test_loss:.4f}  acc={acc:.1%}")
 
-        # Snapshot weights, buffers, and optimizer state for this epoch
         observer.snapshot(
             epoch=epoch,
             step=step,
@@ -204,47 +164,42 @@ def main() -> None:
 
     observer.close()
     print(f"\nTraining done. {num_epochs} snapshots saved.")
+    return train_loss_history, test_loss_history, accuracy_history
 
-    # ── SnapshotCollection — post-training queries ─────────────────────────────
 
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
+
+
+def analyze(
+    snapshots: SnapshotCollection,
+    run_dir: Path,
+    test_loader: DataLoader,
+    replay_modules: list[str],
+    num_epochs: int,
+    device: torch.device,
+) -> list[dict[str, dict[str, np.ndarray]]]:
     print("\n── SnapshotCollection ──")
-    col = NeuroInquisitor.load(run_dir)
+    print(f"  Available epochs : {snapshots.epochs}")
+    print(f"  Captured layers  : {len(snapshots.layers)} tensors")
+    print(f"  Total snapshots  : {len(snapshots)}")
+    print(f"  by_epoch(0) keys : {list(snapshots.by_epoch(0).keys())[:4]} …")
+    print(f"  by_layer('conv1.weight') epochs : {list(snapshots.by_layer('conv1.weight').keys())}")
 
-    print(f"  Available epochs : {col.epochs}")
-    print(f"  Captured layers  : {len(col.layers)} tensors")
-    print(f"  Total snapshots  : {len(col)}")
-
-    snap_0 = col.by_epoch(0)
-    print(f"  by_epoch(0) keys : {list(snap_0.keys())[:4]} …")
-
-    conv1_trajectory = col.by_layer("conv1.weight")
-    print(f"  by_layer('conv1.weight') epochs : {list(conv1_trajectory.keys())}")
-
-    sub = col.select(epochs=[0], layers=["fc1.weight", "fc2.weight"])
-    print(f"  select(epochs=[0], layers=[fc1, fc2]) : {sub.layers}")
-
-    arrays = col.to_numpy(epoch=0, layers=["conv1.weight"])
+    arrays = snapshots.to_numpy(epoch=0, layers=["conv1.weight"])
     print(f"  to_numpy(epoch=0, layers=['conv1.weight']) shape : {arrays['conv1.weight'].shape}")
 
-    state = col.to_state_dict(epoch=0)
     restored = CIFAR10Net().to(device)
-    restored.load_state_dict(state, strict=False)
+    restored.load_state_dict(snapshots.to_state_dict(epoch=0), strict=False)
     print(f"  to_state_dict(epoch=0) → model restored (strict=False)")
 
-    # ── ReplaySession — activations, gradients, and logits (per epoch) ──────────
-    #
-    # Replay every saved checkpoint on the same 128 test samples so activations
-    # and gradients can be animated over training time.
-    # activation_reduction="pool"   → (N, C) tensors; spatial dims collapsed.
-    # gradient_mode="aggregated"    → mean gradient over the batch.
-
     print("\n── ReplaySession ──")
-    replay_modules = ["conv1", "conv2", "fc1"]
     replay_history: list[dict[str, dict[str, np.ndarray]]] = []
     final_replay = None
 
     for epoch in tqdm(range(num_epochs), desc="  Replaying checkpoints", unit="ckpt", leave=True):
-        replay = ReplaySession(
+        final_replay = ReplaySession(
             run=run_dir,
             checkpoint=epoch,
             model_factory=CIFAR10Net,
@@ -255,8 +210,7 @@ def main() -> None:
             gradient_mode="aggregated",
             dataset_slice=lambda samples: samples[:128],
             slice_metadata={"description": "first 128 test samples"},
-        )
-        final_replay = replay.run()
+        ).run()
         replay_history.append({
             "activations": final_replay.activations.to_numpy(),
             "gradients":   final_replay.gradients.to_numpy(),
@@ -265,34 +219,80 @@ def main() -> None:
     print(f"  Samples replayed : {final_replay.metadata.n_samples}")
     print(f"  Logits shape     : {final_replay.logits.shape}")
     for name in replay_modules:
-        act_shape  = final_replay.activations[name].shape
-        grad_shape = final_replay.gradients[name].shape
-        print(f"  {name:6s} — activations {tuple(act_shape)}  gradients {tuple(grad_shape)}")
+        print(f"  {name:6s} — activations {tuple(final_replay.activations[name].shape)}"
+              f"  gradients {tuple(final_replay.gradients[name].shape)}")
 
-    # ── Visualizations ────────────────────────────────────────────────────────
+    return replay_history
 
-    print("\n── Visualizations ──")
-    weight_history = [col.by_epoch(e) for e in range(num_epochs)]
 
-    video_path = run_dir / "weights_over_time.mp4"
-    print(f"  Generating weight video    → {video_path.name} …")
-    result_path = make_video(weight_history, accuracy_history, video_path, fps=4)
-    print(f"  Saved: {result_path.name}")
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
-    replay_vid_path = run_dir / "activations_gradients.mp4"
-    print(f"  Generating replay video    → {replay_vid_path.name} …")
-    replay_result = make_replay_video(replay_history, replay_modules, accuracy_history, replay_vid_path, fps=4)
-    print(f"  Saved: {replay_result.name}")
 
-    combined_path = run_dir / "full_dashboard.mp4"
-    print(f"  Generating combined video  → {combined_path.name} …")
-    combined_result = make_combined_video(weight_history, replay_history, accuracy_history, replay_modules, combined_path, fps=4)
-    print(f"  Saved: {combined_result.name}")
+def main() -> None:
+    torch.manual_seed(42)
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
-    curves_path = run_dir / "loss_curves.png"
-    save_loss_curves(train_loss_history, test_loss_history, accuracy_history, curves_path)
-    print(f"  Saved: {curves_path.name}")
+    run_name = petname.generate(words=2, separator="-")
+    run_dir  = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / run_name
+    data_dir = Path(__file__).parent.parent / "outputs" / "CIFAR10_example" / "data"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"Run name : {run_name}")
+    print(f"Run dir  : {run_dir}/")
+    print(f"Device   : {device}\n")
+
+    num_epochs     = 5
+    replay_modules = ["conv1", "conv2", "fc1"]
+
+    train_loader, test_loader = load_data(data_dir, device)
+
+    model     = CIFAR10Net().to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
+    loss_fn   = nn.CrossEntropyLoss()
+
+    policy = CapturePolicy(
+        capture_parameters=True,
+        capture_buffers=True,
+        capture_optimizer=True,
+        replay_activations=True,
+        replay_gradients=True,
+    )
+    run_meta = RunMetadata(
+        training_config={"batch_size": 256, "lr": 1e-3, "weight_decay": 1e-4, "T_max": 60},
+        optimizer_class="Adam",
+        device=str(device),
+        model_class="CIFAR10Net",
+    )
+    observer = NeuroInquisitor(
+        model,
+        log_dir=run_dir,
+        compress=True,
+        create_new=True,
+        capture_policy=policy,
+        run_metadata=run_meta,
+    )
+
+    train_losses, test_losses, accuracy_history = train(
+        model, optimizer, scheduler, loss_fn,
+        train_loader, test_loader, observer,
+        device, num_epochs,
+    )
+
+    snapshots      = NeuroInquisitor.load(run_dir)
+    replay_history = analyze(snapshots, run_dir, test_loader, replay_modules, num_epochs, device)
+    weight_history = [snapshots.by_epoch(e) for e in range(num_epochs)]
+
+    generate_visualizations(
+        weight_history, replay_history, replay_modules,
+        accuracy_history, train_losses, test_losses, run_dir,
+    )
     print(f"\nAll outputs in: {run_dir}/")
 
 
