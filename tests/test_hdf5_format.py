@@ -212,6 +212,83 @@ class TestHDF5FormatUnit:
         loaded = fmt.read(path)
         np.testing.assert_array_equal(loaded["w"], arr)
 
+    # --- write_to_path (NI-LLM-003) ---
+
+    def test_write_to_path_round_trip(self, tmp_path: Path) -> None:
+        fmt = HDF5Format()
+        arrays = self._arrays()
+        dest = tmp_path / "snap.h5"
+        fmt.write_to_path(dest, arrays, {})
+        loaded = fmt.read(dest)
+        for name, arr in arrays.items():
+            np.testing.assert_array_equal(loaded[name], arr)
+
+    def test_write_to_path_numerically_identical_to_write(self, tmp_path: Path) -> None:
+        fmt = HDF5Format()
+        arrays = self._arrays()
+        meta = {"epoch": 1}
+
+        via_bytes = tmp_path / "via_bytes.h5"
+        via_bytes.write_bytes(fmt.write(arrays, meta))
+
+        via_path = tmp_path / "via_path.h5"
+        fmt.write_to_path(via_path, arrays, meta)
+
+        loaded_bytes = fmt.read(via_bytes)
+        loaded_path = fmt.read(via_path)
+        for name in arrays:
+            np.testing.assert_array_equal(loaded_path[name], loaded_bytes[name])
+
+    def test_write_to_path_creates_file(self, tmp_path: Path) -> None:
+        fmt = HDF5Format()
+        dest = tmp_path / "snap.h5"
+        assert not dest.exists()
+        fmt.write_to_path(dest, self._arrays(), {})
+        assert dest.exists()
+
+    def test_write_to_path_with_compression(self, tmp_path: Path) -> None:
+        fmt = HDF5Format()
+        arrays = self._arrays()
+        dest = tmp_path / "snap.h5"
+        fmt.write_to_path(dest, arrays, {}, compress=True)
+        with h5py.File(str(dest), "r") as f:
+            assert f["fc1.weight"].compression == "gzip"
+
+    def test_write_to_path_with_buffers(self, tmp_path: Path) -> None:
+        fmt = HDF5Format()
+        rng = np.random.default_rng(1)
+        buffers = {"bn.running_mean": rng.standard_normal((8,)).astype(np.float32)}
+        dest = tmp_path / "snap.h5"
+        fmt.write_to_path(dest, self._arrays(), {}, buffers=buffers)
+        loaded_bufs = fmt.read_buffers(dest)
+        np.testing.assert_array_equal(loaded_bufs["bn.running_mean"], buffers["bn.running_mean"])
+
+    def test_base_format_write_to_path_fallback(self, tmp_path: Path) -> None:
+        """A Format subclass that does not override write_to_path falls back to write()."""
+        from neuroinquisitor.formats.base import Format
+
+        class _StubFormat(Format):
+            @property
+            def extension(self) -> str:
+                return ".h5"
+
+            def write(self, params, metadata, compress=False, buffers=None) -> bytes:
+                return HDF5Format().write(params, metadata, compress=compress, buffers=buffers)
+
+            def read(self, path, layers=None):
+                return HDF5Format().read(path, layers=layers)
+
+            def list_layers(self, path):
+                return HDF5Format().list_layers(path)
+
+        stub = _StubFormat()
+        arrays = self._arrays()
+        dest = tmp_path / "stub.h5"
+        stub.write_to_path(dest, arrays, {})  # must not raise
+        loaded = stub.read(dest)
+        for name, arr in arrays.items():
+            np.testing.assert_array_equal(loaded[name], arr)
+
 
 # ---------------------------------------------------------------------------
 # NeuroInquisitor integration with format="hdf5"
