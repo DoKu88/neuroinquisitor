@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 
 from neuroinquisitor.backends.base import Backend
 from neuroinquisitor.collection import SnapshotCollection
@@ -79,6 +80,10 @@ class NeuroInquisitor:
         Declares what is captured at snapshot time.  Defaults to
         :class:`~neuroinquisitor.schema.CapturePolicy` with parameters
         only (no buffers, no optimizer state).
+    layer_filter:
+        When provided, only parameters whose names are in this set are
+        captured at snapshot time.  ``None`` (default) captures all
+        parameters.
     run_metadata:
         Provenance metadata for this run.  When ``None`` and
         ``create_new=True``, git commit, model class, dtype, and device
@@ -94,12 +99,18 @@ class NeuroInquisitor:
         backend: str | Backend = "local",
         format: str | Format = "hdf5",
         capture_policy: CapturePolicy | None = None,
+        layer_filter: set[str] | None = None,
         run_metadata: RunMetadata | None = None,
     ) -> None:
         self._model = model
         self._compress = compress
         self._closed = False
+        self._layer_filter = layer_filter
         self._capture_policy = capture_policy or CapturePolicy()
+        if layer_filter is not None:
+            self._capture_policy = self._capture_policy.model_copy(
+                update={"layer_filter": sorted(layer_filter)}
+            )
 
         self._log_dir = Path(log_dir)
         self._backend = _resolve_backend(backend, self._log_dir)
@@ -203,15 +214,22 @@ class NeuroInquisitor:
                 "Each (epoch, step) combination must be unique."
             )
 
+        def _to_numpy(t: torch.Tensor) -> np.ndarray:
+            t = t.detach().cpu()
+            if t.dtype == torch.bfloat16:
+                t = t.to(torch.float32)
+            return t.numpy()
+
         params: dict[str, np.ndarray] = {
-            name: param.detach().cpu().numpy()
+            name: _to_numpy(param)
             for name, param in self._model.named_parameters()
+            if self._layer_filter is None or name in self._layer_filter
         }
 
         buffers: dict[str, np.ndarray] | None = None
         if self._capture_policy.capture_buffers:
             raw_buffers = {
-                name: buf.detach().cpu().numpy()
+                name: _to_numpy(buf)
                 for name, buf in self._model.named_buffers()
                 if buf is not None
             }

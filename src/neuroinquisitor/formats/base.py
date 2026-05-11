@@ -61,6 +61,23 @@ class Format(ABC):
         """
         return {}
 
+    def write_to_path(
+        self,
+        dest: Path,
+        params: dict[str, np.ndarray],
+        metadata: dict[str, object],
+        compress: bool = False,
+        buffers: dict[str, np.ndarray] | None = None,
+    ) -> None:
+        """Write snapshot directly to *dest*.
+
+        Default implementation falls back to :meth:`write` so subclasses that
+        do not override this method still work correctly.  Formats that support
+        streaming writes (e.g. HDF5) should override to avoid holding the full
+        serialised checkpoint in RAM.
+        """
+        dest.write_bytes(self.write(params, metadata, compress=compress, buffers=buffers))
+
     @abstractmethod
     def list_layers(self, path: Path) -> list[str]:
         """Return all parameter names stored in *path* without reading tensors."""

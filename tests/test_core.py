@@ -6,7 +6,9 @@ import json
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 import torch.nn as nn
 
 from neuroinquisitor import NeuroInquisitor
@@ -229,3 +231,118 @@ def test_load_classmethod_returns_collection(
     col = NeuroInquisitor.load(tmp_path)
     assert isinstance(col, SnapshotCollection)
     assert col.epochs == [0]
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-001: bfloat16 snapshot round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_bfloat16_params_snapshot_no_error(tmp_path: Path) -> None:
+    model = nn.Linear(4, 2).to(torch.bfloat16)
+    obs = NeuroInquisitor(model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)  # must not raise
+    obs.close()
+
+
+def test_bfloat16_params_values_match_float32_cast(tmp_path: Path) -> None:
+    model = nn.Linear(4, 2).to(torch.bfloat16)
+    original = {
+        name: param.detach().cpu().to(torch.float32).numpy().copy()
+        for name, param in model.named_parameters()
+    }
+    obs = NeuroInquisitor(model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    for name, arr in original.items():
+        np.testing.assert_array_equal(loaded[name], arr)
+
+
+def test_bfloat16_buffers_snapshot_no_error(tmp_path: Path) -> None:
+    from neuroinquisitor.schema import CapturePolicy
+
+    model = nn.BatchNorm1d(4).to(torch.bfloat16)
+    policy = CapturePolicy(capture_buffers=True)
+    obs = NeuroInquisitor(model, log_dir=tmp_path, capture_policy=policy)
+    obs.snapshot(epoch=0)  # must not raise
+    obs.close()
+
+
+def test_bfloat16_buffers_values_match_float32_cast(tmp_path: Path) -> None:
+    from neuroinquisitor.schema import CapturePolicy
+
+    model = nn.BatchNorm1d(4).to(torch.bfloat16)
+    original_buffers = {
+        name: buf.detach().cpu().to(torch.float32).numpy().copy()
+        for name, buf in model.named_buffers()
+        if buf is not None
+    }
+    policy = CapturePolicy(capture_buffers=True)
+    obs = NeuroInquisitor(model, log_dir=tmp_path, capture_policy=policy)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    import json as _json
+    from neuroinquisitor.formats.hdf5_format import HDF5Format
+
+    snap_path = tmp_path / "epoch_0000.h5"
+    loaded_buffers = HDF5Format().read_buffers(snap_path)
+    for name, arr in original_buffers.items():
+        np.testing.assert_array_equal(loaded_buffers[name], arr)
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-002: layer_filter
+# ---------------------------------------------------------------------------
+
+
+def _three_layer_model() -> nn.Module:
+    return nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 4), nn.Linear(4, 2))
+
+
+def test_layer_filter_restricts_captured_params(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    target = "0.weight"
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={target})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    assert set(loaded.keys()) == {target}
+
+
+def test_layer_filter_index_reflects_filtered_layers(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    target = "0.weight"
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={target})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    data = json.loads((tmp_path / "index.json").read_text())
+    snap = data["snapshots"][0]
+    assert snap["layers"] == [target]
+
+
+def test_layer_filter_capture_policy_stored_in_manifest(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={"0.weight", "0.bias"})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    data = json.loads((tmp_path / "index.json").read_text())
+    policy = data["capture_policy"]
+    assert policy["layer_filter"] is not None
+    assert set(policy["layer_filter"]) == {"0.weight", "0.bias"}
+
+
+def test_layer_filter_none_captures_all_params(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter=None)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    expected = {name for name, _ in model.named_parameters()}
+    assert set(loaded.keys()) == expected

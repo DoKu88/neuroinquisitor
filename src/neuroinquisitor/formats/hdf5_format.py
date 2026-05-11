@@ -66,6 +66,38 @@ class HDF5Format(Format):
 
         return buf.getvalue()
 
+    def write_to_path(
+        self,
+        dest: Path,
+        params: dict[str, np.ndarray],
+        metadata: dict[str, object],
+        compress: bool = False,
+        buffers: dict[str, np.ndarray] | None = None,
+    ) -> None:
+        """Write snapshot directly to *dest* via h5py, with no BytesIO buffer."""
+        compression = "gzip" if compress else None
+        compression_opts = _GZIP_LEVEL if compress else None
+
+        with h5py.File(str(dest), "w") as f:
+            for name, array in params.items():
+                f.create_dataset(
+                    name,
+                    data=np.ascontiguousarray(array),
+                    compression=compression,
+                    compression_opts=compression_opts,
+                )
+            if buffers:
+                grp = f.require_group(_BUFFERS_GROUP)
+                for name, array in buffers.items():
+                    grp.create_dataset(
+                        name,
+                        data=np.ascontiguousarray(array),
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+            for k, v in metadata.items():
+                f.attrs[k] = str(v)
+
     def read(
         self,
         path: Path,
