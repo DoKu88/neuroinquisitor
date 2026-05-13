@@ -6,7 +6,9 @@ import json
 import warnings
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 import torch.nn as nn
 
 from neuroinquisitor import NeuroInquisitor
@@ -229,3 +231,197 @@ def test_load_classmethod_returns_collection(
     col = NeuroInquisitor.load(tmp_path)
     assert isinstance(col, SnapshotCollection)
     assert col.epochs == [0]
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-001: bfloat16 snapshot round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_bfloat16_params_snapshot_no_error(tmp_path: Path) -> None:
+    model = nn.Linear(4, 2).to(torch.bfloat16)
+    obs = NeuroInquisitor(model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)  # must not raise
+    obs.close()
+
+
+def test_bfloat16_params_values_match_float32_cast(tmp_path: Path) -> None:
+    model = nn.Linear(4, 2).to(torch.bfloat16)
+    original = {
+        name: param.detach().cpu().to(torch.float32).numpy().copy()
+        for name, param in model.named_parameters()
+    }
+    obs = NeuroInquisitor(model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    for name, arr in original.items():
+        np.testing.assert_array_equal(loaded[name], arr)
+
+
+def test_bfloat16_buffers_snapshot_no_error(tmp_path: Path) -> None:
+    from neuroinquisitor.schema import CapturePolicy
+
+    model = nn.BatchNorm1d(4).to(torch.bfloat16)
+    policy = CapturePolicy(capture_buffers=True)
+    obs = NeuroInquisitor(model, log_dir=tmp_path, capture_policy=policy)
+    obs.snapshot(epoch=0)  # must not raise
+    obs.close()
+
+
+def test_bfloat16_buffers_values_match_float32_cast(tmp_path: Path) -> None:
+    from neuroinquisitor.schema import CapturePolicy
+
+    model = nn.BatchNorm1d(4).to(torch.bfloat16)
+    original_buffers = {
+        name: buf.detach().cpu().to(torch.float32).numpy().copy()
+        for name, buf in model.named_buffers()
+        if buf is not None
+    }
+    policy = CapturePolicy(capture_buffers=True)
+    obs = NeuroInquisitor(model, log_dir=tmp_path, capture_policy=policy)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    import json as _json
+    from neuroinquisitor.formats.hdf5_format import HDF5Format
+
+    snap_path = tmp_path / "epoch_0000.h5"
+    loaded_buffers = HDF5Format().read_buffers(snap_path)
+    for name, arr in original_buffers.items():
+        np.testing.assert_array_equal(loaded_buffers[name], arr)
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-002: layer_filter
+# ---------------------------------------------------------------------------
+
+
+def _three_layer_model() -> nn.Module:
+    return nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 4), nn.Linear(4, 2))
+
+
+def test_layer_filter_restricts_captured_params(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    target = "0.weight"
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={target})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    assert set(loaded.keys()) == {target}
+
+
+def test_layer_filter_index_reflects_filtered_layers(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    target = "0.weight"
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={target})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    data = json.loads((tmp_path / "index.json").read_text())
+    snap = data["snapshots"][0]
+    assert snap["layers"] == [target]
+
+
+def test_layer_filter_capture_policy_stored_in_manifest(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter={"0.weight", "0.bias"})
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    data = json.loads((tmp_path / "index.json").read_text())
+    policy = data["capture_policy"]
+    assert policy["layer_filter"] is not None
+    assert set(policy["layer_filter"]) == {"0.weight", "0.bias"}
+
+
+def test_layer_filter_none_captures_all_params(tmp_path: Path) -> None:
+    model = _three_layer_model()
+    obs = NeuroInquisitor(model, log_dir=tmp_path, layer_filter=None)
+    obs.snapshot(epoch=0)
+    obs.close()
+
+    loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
+    expected = {name for name, _ in model.named_parameters()}
+    assert set(loaded.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-006: streaming snapshot path
+# ---------------------------------------------------------------------------
+
+
+from neuroinquisitor import Backend  # noqa: E402
+
+
+class _PathBackend(Backend):
+    """Minimal Backend stand-in that implements ``write_from_path``.
+
+    Records which calls were made so the test can assert the streaming path
+    was selected rather than the legacy bytes path.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._root.mkdir(parents=True, exist_ok=True)
+        self.write_calls: list[str] = []
+        self.path_calls: list[str] = []
+        self.closed = False
+
+    def write(self, key: str, data: bytes) -> None:
+        self.write_calls.append(key)
+        (self._root / key).parent.mkdir(parents=True, exist_ok=True)
+        (self._root / key).write_bytes(data)
+
+    def write_from_path(self, key: str, src) -> None:  # noqa: ANN001
+        self.path_calls.append(key)
+        from pathlib import Path as _P
+        from shutil import move
+
+        dest = self._root / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        move(str(_P(src)), str(dest))
+
+    def read_path(self, key: str) -> Path:
+        return self._root / key
+
+    def exists(self, key: str) -> bool:
+        return (self._root / key).exists()
+
+    def delete(self, key: str) -> None:  # pragma: no cover
+        (self._root / key).unlink(missing_ok=True)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_snapshot_uses_streaming_path_when_backend_supports_it(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    backend = _PathBackend(tmp_path)
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, backend=backend)
+    obs.snapshot(epoch=0)
+    # index.json goes through .write(); snapshot file goes through write_from_path.
+    assert "epoch_0000.h5" in backend.path_calls
+    assert "epoch_0000.h5" not in backend.write_calls
+    obs.close()
+
+
+def test_close_calls_backend_close(simple_model: nn.Module, tmp_path: Path) -> None:
+    backend = _PathBackend(tmp_path)
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, backend=backend)
+    obs.snapshot(epoch=0)
+    obs.close()
+    assert backend.closed is True
+
+
+def test_local_backend_uses_legacy_bytes_path(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    """LocalBackend has no write_from_path; behaviour must be unchanged."""
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
+    obs.close()
+    assert (tmp_path / "epoch_0000.h5").exists()

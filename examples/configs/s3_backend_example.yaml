@@ -1,0 +1,52 @@
+name: S3 Backend Example
+description: End-to-end integration test for S3Backend + SafetensorsFormat. Trains a tiny MLP, snapshots weights to a real S3 bucket asynchronously, then loads them back and verifies round-trip integrity.
+tags:
+  - integration
+  - s3
+  - cloud
+  - safetensors
+dependencies:
+  - boto3
+  - safetensors
+  - matplotlib
+
+# ---------------------------------------------------------------------------
+# S3 configuration
+# ---------------------------------------------------------------------------
+# Bucket, prefix, and region can be set here OR in examples/configs/.env
+# (copy .env.example → .env and fill in S3_BUCKET / S3_PREFIX / S3_REGION).
+# Non-empty values below take priority over the .env file.
+#
+# AWS credentials are resolved via the standard boto3 chain:
+#   1. Shell environment variables (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+#   2. examples/configs/.env  (copy .env.example → .env and fill in values)
+#   3. AWS_PROFILE / ~/.aws/credentials
+#   4. IAM role (when running on EC2 / Modal / etc.)
+# ---------------------------------------------------------------------------
+
+s3:
+  bucket: ""              # overrides S3_BUCKET from .env when non-empty
+  prefix: ""              # overrides S3_PREFIX from .env when non-empty (default: ni-examples)
+  region: ""              # overrides S3_REGION from .env when non-empty (default: us-east-1)
+  cleanup_after_upload: true   # delete local tmp file once the S3 upload confirms
+
+# Snapshot format — either "hdf5" (default) or "safetensors" (bfloat16-native).
+format: safetensors
+
+# ---------------------------------------------------------------------------
+# Tiny model + training — kept small on purpose so the focus is on S3 I/O.
+# ---------------------------------------------------------------------------
+
+# data
+n_samples: 256
+n_features: 16
+n_classes: 4
+
+# model
+hidden: 32
+
+# training
+num_epochs: 6
+batch_size: 64
+lr: 0.01
+snapshot_every_epoch: true

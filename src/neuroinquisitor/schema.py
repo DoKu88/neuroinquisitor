@@ -23,6 +23,7 @@ class CapturePolicy(BaseModel):
     capture_optimizer: bool = False
     replay_activations: bool = False
     replay_gradients: bool = False
+    layer_filter: list[str] | None = None
 
 
 class RunMetadata(BaseModel):
