@@ -19,6 +19,13 @@ _FORMATS: dict[str, type[Format]] = {
     "hdf5": HDF5Format,
 }
 
+try:  # optional: safetensors
+    from neuroinquisitor.formats.safetensors_format import SafetensorsFormat
+
+    _FORMATS["safetensors"] = SafetensorsFormat
+except ImportError:  # pragma: no cover
+    pass
+
 
 def resolve_backend(spec: str | Backend, log_dir: Path) -> Backend:
     if isinstance(spec, Backend):

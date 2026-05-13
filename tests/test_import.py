@@ -71,3 +71,29 @@ def test_index_abc_exported() -> None:
     assert hasattr(entry, "file_key")
     assert hasattr(entry, "layers")
     assert hasattr(entry, "metadata")
+
+
+def test_safetensors_format_exported_when_available() -> None:
+    import importlib
+
+    if importlib.util.find_spec("safetensors") is None:
+        assert not hasattr(neuroinquisitor, "SafetensorsFormat")
+        return
+
+    from neuroinquisitor import Format, SafetensorsFormat
+
+    assert issubclass(SafetensorsFormat, Format)
+    assert "SafetensorsFormat" in neuroinquisitor.__all__
+
+
+def test_s3_backend_exported_when_available() -> None:
+    import importlib
+
+    if importlib.util.find_spec("boto3") is None:
+        assert not hasattr(neuroinquisitor, "S3Backend")
+        return
+
+    from neuroinquisitor import Backend, S3Backend
+
+    assert issubclass(S3Backend, Backend)
+    assert "S3Backend" in neuroinquisitor.__all__

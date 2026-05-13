@@ -23,7 +23,11 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "moto>=4.0",
 ]
+s3 = ["boto3>=1.26"]
+safetensors = ["safetensors>=0.4"]
+zarr = ["zarr>=2.16", "numcodecs>=0.12"]
 examples = [
     # plotting & utilities
     "matplotlib>=3.7",

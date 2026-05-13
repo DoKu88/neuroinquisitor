@@ -346,3 +346,82 @@ def test_layer_filter_none_captures_all_params(tmp_path: Path) -> None:
     loaded = NeuroInquisitor.load(tmp_path).by_epoch(0)
     expected = {name for name, _ in model.named_parameters()}
     assert set(loaded.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# NI-LLM-006: streaming snapshot path
+# ---------------------------------------------------------------------------
+
+
+from neuroinquisitor import Backend  # noqa: E402
+
+
+class _PathBackend(Backend):
+    """Minimal Backend stand-in that implements ``write_from_path``.
+
+    Records which calls were made so the test can assert the streaming path
+    was selected rather than the legacy bytes path.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self._root.mkdir(parents=True, exist_ok=True)
+        self.write_calls: list[str] = []
+        self.path_calls: list[str] = []
+        self.closed = False
+
+    def write(self, key: str, data: bytes) -> None:
+        self.write_calls.append(key)
+        (self._root / key).parent.mkdir(parents=True, exist_ok=True)
+        (self._root / key).write_bytes(data)
+
+    def write_from_path(self, key: str, src) -> None:  # noqa: ANN001
+        self.path_calls.append(key)
+        from pathlib import Path as _P
+        from shutil import move
+
+        dest = self._root / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        move(str(_P(src)), str(dest))
+
+    def read_path(self, key: str) -> Path:
+        return self._root / key
+
+    def exists(self, key: str) -> bool:
+        return (self._root / key).exists()
+
+    def delete(self, key: str) -> None:  # pragma: no cover
+        (self._root / key).unlink(missing_ok=True)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_snapshot_uses_streaming_path_when_backend_supports_it(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    backend = _PathBackend(tmp_path)
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, backend=backend)
+    obs.snapshot(epoch=0)
+    # index.json goes through .write(); snapshot file goes through write_from_path.
+    assert "epoch_0000.h5" in backend.path_calls
+    assert "epoch_0000.h5" not in backend.write_calls
+    obs.close()
+
+
+def test_close_calls_backend_close(simple_model: nn.Module, tmp_path: Path) -> None:
+    backend = _PathBackend(tmp_path)
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path, backend=backend)
+    obs.snapshot(epoch=0)
+    obs.close()
+    assert backend.closed is True
+
+
+def test_local_backend_uses_legacy_bytes_path(
+    simple_model: nn.Module, tmp_path: Path
+) -> None:
+    """LocalBackend has no write_from_path; behaviour must be unchanged."""
+    obs = NeuroInquisitor(simple_model, log_dir=tmp_path)
+    obs.snapshot(epoch=0)
+    obs.close()
+    assert (tmp_path / "epoch_0000.h5").exists()

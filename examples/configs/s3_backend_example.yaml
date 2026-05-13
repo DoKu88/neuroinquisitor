@@ -1,0 +1,48 @@
+name: S3 Backend Example
+description: End-to-end integration test for S3Backend + SafetensorsFormat. Trains a tiny MLP, snapshots weights to a real S3 bucket asynchronously, then loads them back and verifies round-trip integrity.
+tags:
+  - integration
+  - s3
+  - cloud
+  - safetensors
+dependencies:
+  - boto3
+  - safetensors
+  - matplotlib
+
+# ---------------------------------------------------------------------------
+# S3 — REQUIRED. Fill these in before running.
+# ---------------------------------------------------------------------------
+# Credentials are NOT read from this file. They come from the standard boto3
+# resolution chain:
+#   1. AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars
+#   2. AWS_PROFILE (~/.aws/credentials)
+#   3. IAM role (when running on EC2 / Modal / etc.)
+# ---------------------------------------------------------------------------
+
+s3:
+  bucket: ""              # e.g. "my-neuroinquisitor-bucket"  (REQUIRED)
+  prefix: "ni-examples"   # keys are written under  s3://<bucket>/<prefix>/<run-name>/...
+  region: "us-east-1"     # only consulted to surface a clearer error if the bucket lives elsewhere
+  cleanup_after_upload: true   # delete local tmp file once the S3 upload confirms
+
+# Snapshot format — either "hdf5" (default) or "safetensors" (bfloat16-native).
+format: safetensors
+
+# ---------------------------------------------------------------------------
+# Tiny model + training — kept small on purpose so the focus is on S3 I/O.
+# ---------------------------------------------------------------------------
+
+# data
+n_samples: 256
+n_features: 16
+n_classes: 4
+
+# model
+hidden: 32
+
+# training
+num_epochs: 6
+batch_size: 64
+lr: 0.01
+snapshot_every_epoch: true
