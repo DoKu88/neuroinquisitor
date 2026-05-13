@@ -61,9 +61,10 @@ _cfg_path = Path(__file__).parent / "configs" / "s3_backend_example.yaml"
 _cfg = yaml.safe_load(_cfg_path.read_text())
 
 _S3 = _cfg["s3"]
-BUCKET = _S3["bucket"]
-PREFIX = _S3.get("prefix", "")
-REGION = _S3.get("region", "us-east-1")
+# YAML values take priority; fall back to env vars so bucket can live in .env
+BUCKET = _S3.get("bucket") or os.environ.get("S3_BUCKET", "")
+PREFIX = _S3.get("prefix") or os.environ.get("S3_PREFIX", "ni-examples")
+REGION = _S3.get("region") or os.environ.get("S3_REGION", "us-east-1")
 CLEANUP = bool(_S3.get("cleanup_after_upload", True))
 
 FORMAT = _cfg.get("format", "hdf5")

@@ -11,19 +11,23 @@ dependencies:
   - matplotlib
 
 # ---------------------------------------------------------------------------
-# S3 — REQUIRED. Fill in 'bucket' before running.
+# S3 configuration
 # ---------------------------------------------------------------------------
-# Credentials come from (in priority order):
-#   1. Shell environment variables already exported
+# Bucket, prefix, and region can be set here OR in examples/configs/.env
+# (copy .env.example → .env and fill in S3_BUCKET / S3_PREFIX / S3_REGION).
+# Non-empty values below take priority over the .env file.
+#
+# AWS credentials are resolved via the standard boto3 chain:
+#   1. Shell environment variables (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
 #   2. examples/configs/.env  (copy .env.example → .env and fill in values)
 #   3. AWS_PROFILE / ~/.aws/credentials
 #   4. IAM role (when running on EC2 / Modal / etc.)
 # ---------------------------------------------------------------------------
 
 s3:
-  bucket: ""              # e.g. "my-neuroinquisitor-bucket"  (REQUIRED)
-  prefix: "ni-examples"   # keys are written under  s3://<bucket>/<prefix>/<run-name>/...
-  region: "us-east-1"     # only consulted to surface a clearer error if the bucket lives elsewhere
+  bucket: ""              # overrides S3_BUCKET from .env when non-empty
+  prefix: ""              # overrides S3_PREFIX from .env when non-empty (default: ni-examples)
+  region: ""              # overrides S3_REGION from .env when non-empty (default: us-east-1)
   cleanup_after_upload: true   # delete local tmp file once the S3 upload confirms
 
 # Snapshot format — either "hdf5" (default) or "safetensors" (bfloat16-native).
