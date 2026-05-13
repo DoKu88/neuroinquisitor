@@ -12,11 +12,14 @@ from neuroinquisitor.formats.base import Format
 from neuroinquisitor.formats.hdf5_format import HDF5Format
 from neuroinquisitor.index.json_index import JSONIndex
 
+from neuroinquisitor.formats.safetensors_format import SafetensorsFormat
+
 _BACKENDS: dict[str, type[Backend]] = {
     "local": LocalBackend,
 }
 _FORMATS: dict[str, type[Format]] = {
     "hdf5": HDF5Format,
+    "safetensors": SafetensorsFormat,
 }
 
 

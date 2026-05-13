@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import tempfile
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -220,20 +221,47 @@ class NeuroInquisitor:
                 t = t.to(torch.float32)
             return t.numpy()
 
-        params: dict[str, np.ndarray] = {
-            name: _to_numpy(param)
-            for name, param in self._model.named_parameters()
-            if self._layer_filter is None or name in self._layer_filter
-        }
+        # Bfloat16-safe path: when the format can consume torch tensors directly,
+        # keep references to the original tensors and skip numpy conversion.
+        keep_torch = hasattr(self._format, "write_tensors_to_path")
 
+        raw_tensors: dict[str, torch.Tensor] | None = None
+        raw_buffer_tensors: dict[str, torch.Tensor] | None = None
+        params: dict[str, np.ndarray]
         buffers: dict[str, np.ndarray] | None = None
-        if self._capture_policy.capture_buffers:
-            raw_buffers = {
-                name: _to_numpy(buf)
-                for name, buf in self._model.named_buffers()
-                if buf is not None
+
+        if keep_torch:
+            raw_tensors = {
+                name: param.detach().cpu()
+                for name, param in self._model.named_parameters()
+                if self._layer_filter is None or name in self._layer_filter
             }
-            buffers = raw_buffers if raw_buffers else None
+            params = {}  # only keys are read downstream for the index
+            if self._capture_policy.capture_buffers:
+                raw_buffer_tensors = {
+                    name: buf.detach().cpu()
+                    for name, buf in self._model.named_buffers()
+                    if buf is not None
+                } or None
+            buffer_names = (
+                list(raw_buffer_tensors.keys()) if raw_buffer_tensors else []
+            )
+            param_names = list(raw_tensors.keys())
+        else:
+            params = {
+                name: _to_numpy(param)
+                for name, param in self._model.named_parameters()
+                if self._layer_filter is None or name in self._layer_filter
+            }
+            if self._capture_policy.capture_buffers:
+                raw_buffers = {
+                    name: _to_numpy(buf)
+                    for name, buf in self._model.named_buffers()
+                    if buf is not None
+                }
+                buffers = raw_buffers if raw_buffers else None
+            buffer_names = list(buffers.keys()) if buffers else []
+            param_names = list(params.keys())
 
         file_metadata: dict[str, object] = {}
         if epoch is not None:
@@ -243,21 +271,49 @@ class NeuroInquisitor:
         if metadata:
             file_metadata.update(metadata)
 
-        data = self._format.write(
-            params,
-            file_metadata,
-            compress=self._compress,
-            buffers=buffers,
-        )
-        self._backend.write(file_key, data)
+        if hasattr(self._backend, "write_from_path"):
+            # Streaming path: serialise to a tmp file, hand the path to the backend
+            # (LocalBackend never goes here; S3Backend uploads in a background thread).
+            tmp_dir = getattr(self._backend, "_tmp", None)
+            suffix = self._format.extension
+            tmp = Path(
+                tempfile.mktemp(
+                    suffix=suffix,
+                    dir=str(tmp_dir) if tmp_dir is not None else None,
+                )
+            )
+            if keep_torch and raw_tensors is not None:
+                self._format.write_tensors_to_path(
+                    tmp,
+                    raw_tensors,
+                    file_metadata,
+                    buffers=raw_buffer_tensors,
+                )
+            else:
+                self._format.write_to_path(
+                    tmp,
+                    params,
+                    file_metadata,
+                    compress=self._compress,
+                    buffers=buffers,
+                )
+            self._backend.write_from_path(file_key, tmp)
+        else:
+            data = self._format.write(
+                params,
+                file_metadata,
+                compress=self._compress,
+                buffers=buffers,
+            )
+            self._backend.write(file_key, data)
 
         self._index.add(
             IndexEntry(
                 epoch=epoch,
                 step=step,
                 file_key=file_key,
-                layers=list(params.keys()),
-                buffers=list(buffers.keys()) if buffers else [],
+                layers=param_names,
+                buffers=buffer_names,
                 metadata=metadata or {},
                 capture_policy=self._capture_policy,
             )
@@ -305,10 +361,18 @@ class NeuroInquisitor:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Finalise the run.  Safe to call more than once."""
+        """Finalise the run.  Safe to call more than once.
+
+        Drains the backend (waiting for async uploads to complete) when it
+        exposes a ``close()`` method.  This guarantees no snapshot data is
+        lost when a Modal container or local process exits.
+        """
         if self._closed:
             return
         self._closed = True
+        backend = getattr(self, "_backend", None)
+        if backend is not None and hasattr(backend, "close"):
+            backend.close()
         logger.info("NeuroInquisitor closed %s", self._log_dir)
 
     def __del__(self) -> None:
