@@ -41,17 +41,3 @@ __all__ = [
     "analyzers",
     "__version__",
 ]
-
-try:  # optional: boto3
-    from neuroinquisitor.backends.s3 import S3Backend
-
-    __all__.append("S3Backend")
-except ImportError:  # pragma: no cover
-    pass
-
-try:  # optional: safetensors
-    from neuroinquisitor.formats.safetensors_format import SafetensorsFormat
-
-    __all__.append("SafetensorsFormat")
-except ImportError:  # pragma: no cover
-    pass

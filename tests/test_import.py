@@ -73,27 +73,25 @@ def test_index_abc_exported() -> None:
     assert hasattr(entry, "metadata")
 
 
-def test_safetensors_format_exported_when_available() -> None:
+def test_safetensors_format_importable_when_available() -> None:
     import importlib
 
     if importlib.util.find_spec("safetensors") is None:
-        assert not hasattr(neuroinquisitor, "SafetensorsFormat")
-        return
+        return  # safetensors not installed — nothing to test
 
-    from neuroinquisitor import Format, SafetensorsFormat
+    from neuroinquisitor.formats import Format
+    from neuroinquisitor.formats.safetensors_format import SafetensorsFormat
 
     assert issubclass(SafetensorsFormat, Format)
-    assert "SafetensorsFormat" in neuroinquisitor.__all__
 
 
-def test_s3_backend_exported_when_available() -> None:
+def test_s3_backend_importable_when_available() -> None:
     import importlib
 
     if importlib.util.find_spec("boto3") is None:
-        assert not hasattr(neuroinquisitor, "S3Backend")
-        return
+        return  # boto3 not installed — nothing to test
 
-    from neuroinquisitor import Backend, S3Backend
+    from neuroinquisitor.backends import Backend
+    from neuroinquisitor.backends.s3 import S3Backend
 
     assert issubclass(S3Backend, Backend)
-    assert "S3Backend" in neuroinquisitor.__all__

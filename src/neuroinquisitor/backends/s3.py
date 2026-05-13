@@ -16,24 +16,16 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import boto3
+from botocore.exceptions import ClientError
+
 from .base import Backend
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-try:
-    import boto3
-    from botocore.exceptions import ClientError
-except ImportError:  # pragma: no cover - exercised by import-absence test
-    boto3 = None  # type: ignore[assignment]
-    ClientError = None  # type: ignore[assignment,misc]
-
 
 logger = logging.getLogger(__name__)
-
-_INSTALL_HINT = (
-    "boto3 is required for S3Backend. Install with: pip install neuroinquisitor[s3]"
-)
 
 
 class S3Backend(Backend):
@@ -58,9 +50,6 @@ class S3Backend(Backend):
         max_workers: int = 4,
         cleanup_after_upload: bool = False,
     ) -> None:
-        if boto3 is None:
-            raise ImportError(_INSTALL_HINT)
-
         self._bucket = bucket
         self._prefix = prefix.strip("/")
         self._tmp = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.mkdtemp())
@@ -101,10 +90,7 @@ class S3Backend(Backend):
     def _upload(self, src: Path, key: str) -> None:
         self._client.upload_file(str(src), self._bucket, self._full_key(key))
         if self._cleanup:
-            try:
-                src.unlink()
-            except FileNotFoundError:
-                pass
+            src.unlink(missing_ok=True)
 
     def _enqueue_upload(self, src: Path, key: str) -> None:
         future = self._executor.submit(self._upload, src, key)

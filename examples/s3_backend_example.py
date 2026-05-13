@@ -37,26 +37,20 @@ import tempfile
 import time
 from pathlib import Path
 
+import boto3
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import yaml
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
 
 from neuroinquisitor import NeuroInquisitor, RunMetadata
+from neuroinquisitor.backends.s3 import S3Backend
+from neuroinquisitor.formats.safetensors_format import SafetensorsFormat  # noqa: F401
 
-try:
-    from neuroinquisitor import S3Backend
-except ImportError:
-    print("S3Backend not available. Install with:  pip install 'neuroinquisitor[s3]'", file=sys.stderr)
-    raise
-
-# SafetensorsFormat is optional — fall back to "hdf5" if absent.
-try:
-    from neuroinquisitor import SafetensorsFormat  # noqa: F401
-    _SAFETENSORS_AVAILABLE = True
-except ImportError:
-    _SAFETENSORS_AVAILABLE = False
+load_dotenv(dotenv_path=Path(__file__).parent / "configs" / ".env")
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +67,6 @@ REGION = _S3.get("region", "us-east-1")
 CLEANUP = bool(_S3.get("cleanup_after_upload", True))
 
 FORMAT = _cfg.get("format", "hdf5")
-if FORMAT == "safetensors" and not _SAFETENSORS_AVAILABLE:
-    print("safetensors not installed — falling back to format='hdf5'.")
-    FORMAT = "hdf5"
 
 N_SAMPLES = _cfg["n_samples"]
 N_FEATURES = _cfg["n_features"]
@@ -109,9 +100,6 @@ def _preflight() -> None:
         )
 
     # Sanity: does the bucket exist? (head_bucket is the cheapest probe.)
-    import boto3
-    from botocore.exceptions import ClientError
-
     client = boto3.client("s3", region_name=REGION)
     try:
         client.head_bucket(Bucket=BUCKET)
@@ -226,16 +214,14 @@ def run() -> None:
     print("Verifying round-trip from S3 …")
     verify_tmp = Path(tempfile.mkdtemp(prefix="ni-s3-verify-"))
     verify_backend = S3Backend(bucket=BUCKET, prefix=run_prefix, tmp_dir=verify_tmp)
-    try:
-        col = NeuroInquisitor.load(tmp_dir, backend=verify_backend, format=FORMAT)
-        assert sorted(col.epochs) == list(range(NUM_EPOCHS)), col.epochs
-        for epoch, exp in expected.items():
-            loaded = col.by_epoch(epoch)
-            for name, arr in exp.items():
-                np.testing.assert_allclose(loaded[name], arr, rtol=1e-5, atol=1e-6)
-            print(f"  epoch {epoch}: {len(loaded)} tensors verified ✓")
-    finally:
-        verify_backend.close()
+    col = NeuroInquisitor.load(tmp_dir, backend=verify_backend, format=FORMAT)
+    assert sorted(col.epochs) == list(range(NUM_EPOCHS)), col.epochs
+    for epoch, exp in expected.items():
+        loaded = col.by_epoch(epoch)
+        for name, arr in exp.items():
+            np.testing.assert_allclose(loaded[name], arr, rtol=1e-5, atol=1e-6)
+        print(f"  epoch {epoch}: {len(loaded)} tensors verified ✓")
+    verify_backend.close()
 
     print(
         f"\nDone. {NUM_EPOCHS} snapshots written to s3://{BUCKET}/{run_prefix}/\n"

@@ -6,36 +6,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from safetensors import numpy as _stnp
+from safetensors import safe_open
+from safetensors import torch as _sttorch
 
 from .base import Format
 
 if TYPE_CHECKING:
     import torch
 
-try:
-    from safetensors import numpy as _stnp
-    from safetensors import safe_open
-except ImportError:  # pragma: no cover - exercised by import-absence test
-    _stnp = None  # type: ignore[assignment]
-    safe_open = None  # type: ignore[assignment]
-
-try:
-    from safetensors import torch as _sttorch
-except ImportError:  # pragma: no cover
-    _sttorch = None  # type: ignore[assignment]
-
-
-_INSTALL_HINT = (
-    "safetensors is required for SafetensorsFormat. "
-    "Install with: pip install neuroinquisitor[safetensors]"
-)
-
 _BUFFER_PREFIX = "__buffers__/"
-
-
-def _ensure_available() -> None:
-    if _stnp is None:
-        raise ImportError(_INSTALL_HINT)
 
 
 def _stringify_metadata(metadata: dict[str, object]) -> dict[str, str]:
@@ -83,7 +63,6 @@ class SafetensorsFormat(Format):
         compress: bool = False,  # noqa: ARG002 - safetensors does not compress
         buffers: dict[str, np.ndarray] | None = None,
     ) -> bytes:
-        _ensure_available()
         merged = _merge_buffers(params, buffers)
         return _stnp.save(merged, metadata=_stringify_metadata(metadata))
 
@@ -95,7 +74,6 @@ class SafetensorsFormat(Format):
         compress: bool = False,  # noqa: ARG002
         buffers: dict[str, np.ndarray] | None = None,
     ) -> None:
-        _ensure_available()
         merged = _merge_buffers(params, buffers)
         _stnp.save_file(merged, str(dest), metadata=_stringify_metadata(metadata))
 
@@ -115,9 +93,6 @@ class SafetensorsFormat(Format):
         Uses ``safetensors.torch.save_file`` so dtypes like ``bfloat16`` are
         preserved without a numpy conversion step.
         """
-        _ensure_available()
-        if _sttorch is None:  # pragma: no cover - safetensors.torch is part of pkg
-            raise ImportError(_INSTALL_HINT)
         merged: dict[str, torch.Tensor] = dict(tensors)
         if buffers:
             for name, t in buffers.items():
@@ -133,7 +108,6 @@ class SafetensorsFormat(Format):
         path: Path,
         layers: set[str] | None = None,
     ) -> dict[str, np.ndarray]:
-        _ensure_available()
         out: dict[str, np.ndarray] = {}
         with safe_open(str(path), framework="np") as f:
             for key in f.keys():
@@ -149,7 +123,6 @@ class SafetensorsFormat(Format):
         path: Path,
         names: set[str] | None = None,
     ) -> dict[str, np.ndarray]:
-        _ensure_available()
         out: dict[str, np.ndarray] = {}
         with safe_open(str(path), framework="np") as f:
             for key in f.keys():
@@ -162,6 +135,5 @@ class SafetensorsFormat(Format):
         return out
 
     def list_layers(self, path: Path) -> list[str]:
-        _ensure_available()
         with safe_open(str(path), framework="np") as f:
             return [k for k in f.keys() if not k.startswith(_BUFFER_PREFIX)]

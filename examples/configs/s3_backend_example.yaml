@@ -11,13 +11,13 @@ dependencies:
   - matplotlib
 
 # ---------------------------------------------------------------------------
-# S3 — REQUIRED. Fill these in before running.
+# S3 — REQUIRED. Fill in 'bucket' before running.
 # ---------------------------------------------------------------------------
-# Credentials are NOT read from this file. They come from the standard boto3
-# resolution chain:
-#   1. AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars
-#   2. AWS_PROFILE (~/.aws/credentials)
-#   3. IAM role (when running on EC2 / Modal / etc.)
+# Credentials come from (in priority order):
+#   1. Shell environment variables already exported
+#   2. examples/configs/.env  (copy .env.example → .env and fill in values)
+#   3. AWS_PROFILE / ~/.aws/credentials
+#   4. IAM role (when running on EC2 / Modal / etc.)
 # ---------------------------------------------------------------------------
 
 s3:
